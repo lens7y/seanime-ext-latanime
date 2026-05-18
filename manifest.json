@@ -3,7 +3,7 @@
   "name": "Latanime",
   "description": "Latanime online streaming provider for Seanime. Working servers: mp4upload, mxdrop.",
   "manifestURI": "",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "lens7y",
   "type": "onlinestream-provider",
   "language": "typescript",
