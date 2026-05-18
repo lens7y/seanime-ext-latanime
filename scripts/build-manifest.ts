@@ -32,8 +32,8 @@ function rawUrl(ref: string, file: string): string {
   return `https://raw.githubusercontent.com/${GITHUB_REPO}/${ref}/${file}`;
 }
 
-function releasePayloadUri(ref: string): string {
-  return `https://github.com/${GITHUB_REPO}/releases/download/${ref}/provider.ts`;
+function normalizeRef(ref: string): string {
+  return ref.replace(/^refs\/tags\//, "").replace(/^refs\/heads\//, "");
 }
 
 function latestManifestUri(): string {
@@ -116,10 +116,11 @@ export async function buildManifest(): Promise<void> {
   }
 
   const release = isReleaseRef(GITHUB_REF);
+  const ref = normalizeRef(GITHUB_REF);
   const uris = release
     ? {
         manifestURI: latestManifestUri(),
-        payloadURI: releasePayloadUri(GITHUB_REF),
+        payloadURI: rawUrl(ref, SOURCE_PATH),
       }
     : {
         manifestURI: manifest.manifestURI ?? "",
