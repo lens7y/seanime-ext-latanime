@@ -1,5 +1,3 @@
-#!/usr/bin/env -S deno run --allow-read=./ --allow-write=./
-
 const root = Deno.cwd();
 const SOURCE = `${root}/src/provider.ts`;
 const MANIFEST = `${root}/manifest.json`;
@@ -81,7 +79,7 @@ function defaultManifest(
   };
 }
 
-async function main(): Promise<void> {
+export async function buildManifest(): Promise<void> {
   if (Deno.args.includes("--help") || Deno.args.includes("-h")) {
     console.log("Usage: deno task build:manifest\nEnv: GITHUB_REPO, GITHUB_REF (tag)");
     Deno.exit(0);
@@ -138,4 +136,6 @@ async function main(): Promise<void> {
   await Deno.writeTextFile(MANIFEST, JSON.stringify(next, null, 2) + "\n");
 }
 
-await main();
+if (import.meta.main) {
+  await buildManifest();
+}

@@ -2,9 +2,29 @@
   "compilerOptions": {
     "lib": ["deno.ns", "deno.window"]
   },
+  "permissions": {
+    "build": {
+      "read": ["./"],
+      "write": ["./"],
+      "env": ["GITHUB_REPO", "GITHUB_REF"]
+    },
+    "release": {
+      "read": ["./"],
+      "write": ["./"],
+      "env": ["GITHUB_REPO", "GITHUB_REF"],
+      "run": ["git", "sh"]
+    },
+    "release-push": {
+      "read": ["./"],
+      "write": ["./"],
+      "env": ["GITHUB_REPO", "GITHUB_REF"],
+      "run": ["git", "sh"],
+      "net": true
+    }
+  },
   "tasks": {
-    "build:manifest": "deno run --allow-read=./ --allow-write=./ --allow-env=GITHUB_REPO,GITHUB_REF scripts/build-manifest.ts",
-    "release": "deno run --allow-read=./ --allow-write=./ --allow-run=git scripts/release.ts",
-    "release:push": "deno run --allow-read=./ --allow-write=./ --allow-run=git --allow-net scripts/release.ts --push"
+    "build:manifest": "deno run -P=build scripts/build-manifest.ts",
+    "release": "deno run -P=release scripts/release.ts",
+    "release:push": "deno run -P=release-push scripts/release.ts --push"
   }
 }

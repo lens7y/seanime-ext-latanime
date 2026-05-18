@@ -1,5 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read=./ --allow-write=./ --allow-run=git
-
+import { buildManifest } from "./build-manifest.ts";
 import { tagFromManifest } from "./tag.ts";
 
 const ROOT = Deno.cwd();
@@ -20,16 +19,6 @@ async function git(args: string[]): Promise<{ code: number; stdout: string }> {
   return { code, stdout: new TextDecoder().decode(stdout).trim() };
 }
 
-async function runBuild(): Promise<void> {
-  const { code } = await new Deno.Command("deno", {
-    args: ["task", "build:manifest"],
-    cwd: ROOT,
-    stdout: "inherit",
-    stderr: "inherit",
-  }).output();
-  if (code !== 0) Deno.exit(code);
-}
-
 function parseArgs(argv: string[]): { message?: string; push: boolean } {
   const push = argv.includes("--push");
   const msgIdx = argv.indexOf("--");
@@ -40,7 +29,7 @@ function parseArgs(argv: string[]): { message?: string; push: boolean } {
 async function main(): Promise<void> {
   const { message, push } = parseArgs(Deno.args);
 
-  await runBuild();
+  await buildManifest();
 
   const dirty = await git(["status", "--porcelain", "--", ...FILES]);
   if (dirty.stdout) {

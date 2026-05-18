@@ -1,5 +1,3 @@
-#!/usr/bin/env -S deno run --allow-read=./ --allow-run=git
-
 const MANIFEST = `${Deno.cwd()}/manifest.json`;
 
 async function git(args: string[]): Promise<{ code: number; stdout: string }> {
