@@ -32,6 +32,10 @@ function rawUrl(ref: string, file: string): string {
   return `https://raw.githubusercontent.com/${GITHUB_REPO}/${ref}/${file}`;
 }
 
+function releasePayloadUri(ref: string): string {
+  return `https://github.com/${GITHUB_REPO}/releases/download/${ref}/provider.ts`;
+}
+
 function latestManifestUri(): string {
   return `https://github.com/${GITHUB_REPO}/releases/latest/download/${MANIFEST_BASENAME}`;
 }
@@ -115,7 +119,7 @@ export async function buildManifest(): Promise<void> {
   const uris = release
     ? {
         manifestURI: latestManifestUri(),
-        payloadURI: rawUrl(GITHUB_REF, SOURCE_PATH),
+        payloadURI: releasePayloadUri(GITHUB_REF),
       }
     : {
         manifestURI: manifest.manifestURI ?? "",

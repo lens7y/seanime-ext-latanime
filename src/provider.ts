@@ -662,6 +662,27 @@ class Provider {
     return unpacked;
   }
 
+  private _isDirectStreamUrl(url: string): boolean {
+    return DIRECT_STREAM_RULES.some((rule) => rule.pattern.test(url));
+  }
+
+  private _playbackHeaders(
+    episode: EpisodeDetails,
+    embedUrl: string,
+  ): { [key: string]: string } {
+    const referer = embedUrl && !this._isDirectStreamUrl(embedUrl)
+      ? embedUrl
+      : episode.url;
+    const origin = embedUrl && !this._isDirectStreamUrl(embedUrl)
+      ? this._origin(embedUrl)
+      : this.baseUrl;
+
+    return {
+      ...this._headers(referer),
+      Origin: origin,
+    };
+  }
+
   private async _resolveStream(
     playerUrl: string,
     referer: string,
@@ -735,10 +756,7 @@ class Provider {
 
     return {
       server: resolvedServer,
-      headers: {
-        Referer: resolvedPlayerUrl || this.baseUrl + "/",
-        Origin: resolvedPlayerUrl ? this._origin(resolvedPlayerUrl) : this.baseUrl,
-      },
+      headers: source ? this._playbackHeaders(episode, resolvedPlayerUrl) : {},
       videoSources: source ? [source] : [],
     };
   }
