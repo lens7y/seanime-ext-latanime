@@ -20,11 +20,20 @@
       "env": ["GITHUB_REPO", "GITHUB_REF"],
       "run": ["git", "sh"],
       "net": true
+    },
+    "dev": {
+      "read": ["./"],
+      "write": ["./"],
+      "env": ["DEV_PORT", "DEV_HOST"],
+      "net": true
     }
   },
   "tasks": {
     "build:manifest": "deno run -P=build scripts/build-manifest.ts",
     "release": "deno run -P=release scripts/release.ts",
-    "release:push": "deno run -P=release-push scripts/release.ts --push"
+    "release:push": "deno run -P=release-push scripts/release.ts --push",
+    "dev": "deno task dev:manifest && deno task dev:serve",
+    "dev:manifest": "deno run -P=dev scripts/dev-manifest.ts",
+    "dev:serve": "deno run -P=dev scripts/dev-serve.ts"
   }
 }

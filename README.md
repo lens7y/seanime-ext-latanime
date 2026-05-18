@@ -10,7 +10,15 @@ Seanime → Extensions → add from URL. Older versions: [Releases](https://gith
 
 ## Development
 
-Edit `src/provider.ts`. Test in Seanime Playground (paste the file). [Provider API](https://seanime.gitbook.io/seanime-extensions/content-providers/online-streaming-provider)
+Edit `src/provider.ts`. [Provider API](https://seanime.gitbook.io/seanime-extensions/content-providers/online-streaming-provider).
+
+```bash
+deno task dev
+```
+
+Seanime → Extensions → add from URL (install link printed by the task).
+
+Playground: paste `src/provider.ts` to test methods.
 
 ## Release
 
@@ -25,4 +33,4 @@ CI publishes release assets on tag push.
 
 ## Servers
 
-mp4upload, mxdrop (reliable). Also: filemoon, ok, mixdrop, doodstream, yourupload, wolf, mega, uqload, lulu, listeamed, hlswish, voe.
+mp4upload, mxdrop, filemoon, ok, mixdrop, doodstream, yourupload, wolf, mega, uqload, lulu, listeamed, hlswish, voe — availability varies by episode.
