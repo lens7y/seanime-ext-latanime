@@ -3,12 +3,12 @@
   "name": "Latanime",
   "description": "Latanime online streaming provider for Seanime. Working servers: mp4upload, mxdrop.",
   "manifestURI": "",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "author": "lens7y",
   "type": "onlinestream-provider",
   "language": "typescript",
   "lang": "es",
   "icon": "https://raw.githubusercontent.com/lens7y/seanime-ext-latanime/main/public/icon.png",
   "payloadURI": "",
-  "sourceHash": "fd51f681224eb9dd70e57fbce4ebe8c3058604605776fc12f8faaf515794cac4"
+  "sourceHash": "06c69b2af4fd76630a96a66ce772dd29cec382dd4ef316607ed63043b1dc64c6"
 }
