@@ -74,6 +74,14 @@ const SEASON_SLUG_RULES: {
   format: (base: string, season: string) => string;
 }[] = [
   {
+    pattern: /^(.*?)-temporada-(\d+)$/,
+    format: (base, season) => `${base}-s${season}`,
+  },
+  {
+    pattern: /^(.*?)-s(\d+)$/,
+    format: (base, season) => `${base}-temporada-${season}`,
+  },
+  {
     pattern: /^(.*?)-(?:season-)?(\d+)(?:st|nd|rd|th)?-season$/,
     format: (base, season) => `${base}-s${season}`,
   },
@@ -214,6 +222,45 @@ class Provider {
     return synonyms;
   }
 
+  private _extractSeasonNumber(title: string): number {
+    if (typeof $scannerUtils !== "undefined") {
+      return $scannerUtils.extractSeasonNumber(title);
+    }
+    const patterns = [
+      /\bseason\s*(\d+)\b/i,
+      /\bs(\d{1,2})\b/i,
+      /\b(\d+)(?:st|nd|rd|th)\s+season\b/i,
+      /\btemporada\s*(\d+)\b/i,
+      /\b(\d+)\s* temporada\b/i,
+    ];
+    for (const pattern of patterns) {
+      const match = title.match(pattern);
+      if (match) return parseInt(match[1], 10);
+    }
+    return -1;
+  }
+
+  private _detectSeason(opts: SearchOptions, synonyms: string[]): number {
+    const titles = [
+      opts.query,
+      opts.media?.englishTitle ?? "",
+      opts.media?.romajiTitle ?? "",
+      ...synonyms,
+    ].filter(Boolean);
+
+    let season = -1;
+    for (const title of titles) {
+      const found = this._extractSeasonNumber(title);
+      if (found > season) season = found;
+    }
+    return season;
+  }
+
+  private _compactShowName(title: string): string {
+    const base = title.split(/[:(]/)[0]?.trim() ?? title.trim();
+    return base || title.trim();
+  }
+
   private _spanishTitles(synonyms: string[]): string[] {
     const titles: string[] = [];
     const seen = new Set<string>();
@@ -233,6 +280,7 @@ class Provider {
     opts: SearchOptions,
     synonyms: string[],
     spanishTitles: string[],
+    season: number,
   ): string[] {
     const queries: string[] = [];
     const seen = new Set<string>();
@@ -245,10 +293,30 @@ class Provider {
       queries.push(trimmed);
     };
 
-    for (const title of spanishTitles) add(title);
+    const english = opts.media?.englishTitle ?? "";
+    const romaji = opts.media?.romajiTitle ?? "";
+
+    add(english);
+    if (season > 1) {
+      const short = this._compactShowName(english);
+      if (short) {
+        add(`${short} S${season}`);
+        add(`${short} temporada ${season}`);
+        add(`${short} Season ${season}`);
+      }
+      if (typeof $scannerUtils !== "undefined" && english) {
+        const seasonQuery = $scannerUtils.buildSeasonQuery(english, season);
+        const parts = seasonQuery.replace(/^\(|\)$/g, "").split("|").map((p) =>
+          p.trim()
+        );
+        for (const part of parts) add(part);
+      }
+    }
+
     add(opts.query);
-    add(opts.media?.englishTitle ?? "");
-    add(opts.media?.romajiTitle ?? "");
+    add(romaji);
+
+    for (const title of spanishTitles) add(title);
 
     for (const synonym of synonyms) {
       if (!this._looksSpanish(synonym)) add(synonym);
@@ -286,7 +354,19 @@ class Provider {
       .replace(/^-+|-+$/g, "");
   }
 
-  private _slugVariants(value: string): string[] {
+  private _addSeasonSlugVariants(
+    variants: Set<string>,
+    slug: string,
+    season: number,
+  ): void {
+    if (season <= 1) return;
+
+    variants.add(`${slug}-temporada-${season}`);
+    variants.add(`${slug}-s${season}`);
+    variants.add(`${slug}-season-${season}`);
+  }
+
+  private _slugVariants(value: string, season = -1): string[] {
     const variants = new Set<string>();
     const slug = this._slugify(value);
     if (!slug) return [];
@@ -302,6 +382,12 @@ class Provider {
       if (slug.endsWith(suffix)) variants.add(slug.slice(0, -suffix.length));
     }
 
+    if (season > 1) {
+      for (const base of [...variants]) {
+        this._addSeasonSlugVariants(variants, base, season);
+      }
+    }
+
     return [...variants];
   }
 
@@ -309,27 +395,59 @@ class Provider {
     opts: SearchOptions,
     synonyms: string[],
     spanishTitles: string[],
+    season: number,
   ): string[] {
     const candidates = new Set<string>();
-    const titles = [
-      ...spanishTitles,
-      opts.query,
+    const primary = [
       opts.media?.englishTitle ?? "",
       opts.media?.romajiTitle ?? "",
-      ...synonyms,
+      opts.query,
+      ...spanishTitles,
     ].filter(Boolean);
+    const primaryKeys = new Set(primary.map((t) => t.toLowerCase()));
+    const secondary = synonyms.filter((s) => !primaryKeys.has(s.toLowerCase()));
+    const titles = [...primary, ...secondary];
 
     for (const title of titles) {
       const slugSources = [title, this._titleBaseForSlug(title)].filter(Boolean);
 
       for (const source of slugSources) {
-        for (const slug of this._slugVariants(source)) {
+        for (const slug of this._slugVariants(source, season)) {
           this._addSlugCandidates(candidates, slug);
         }
       }
     }
 
     return [...candidates];
+  }
+
+  private _idSeasonNumber(id: string): number {
+    const temporada = id.match(/-temporada-(\d+)(?:-|$)/);
+    if (temporada) return parseInt(temporada[1], 10);
+    const sSuffix = id.match(/-s(\d+)(?:-|$)/);
+    if (sSuffix) return parseInt(sSuffix[1], 10);
+    const seasonTag = id.match(/-season-(\d+)(?:-|$)/);
+    if (seasonTag) return parseInt(seasonTag[1], 10);
+    return -1;
+  }
+
+  private _sortSearchResults(
+    results: SearchResult[],
+    season: number,
+  ): SearchResult[] {
+    const score = (id: string): number => {
+      const idSeason = this._idSeasonNumber(id);
+      if (season > 1) {
+        if (idSeason === season) return 20;
+        if (idSeason > 0 && idSeason !== season) return -10;
+        if (/-temporada-\d+|-s\d+(?:-|$)|-season-\d+/.test(id)) return -5;
+        return 0;
+      }
+      if (idSeason > 1) return -5;
+      return 0;
+    };
+
+    return [...results].sort((a, b) => score(b.id) - score(a.id));
   }
 
   private _filterByDub(results: SearchResult[], dub: boolean): SearchResult[] {
@@ -427,6 +545,21 @@ class Provider {
   }
 
   private _parseTitle(html: string): string {
+    const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+    const h2 = h2Match ? this._stripTags(h2Match[1]) : "";
+
+    const h3Match =
+      html.match(
+        /<h3[^>]*class=["'][^"']*\bfs-6\b[^"']*["'][^>]*>([\s\S]*?)<\/h3>/i,
+      ) ??
+      html.match(
+        /<h3[^>]*class=["'][^"']*text-light[^"']*["'][^>]*>([\s\S]*?)<\/h3>/i,
+      );
+    const h3 = h3Match ? this._stripTags(h3Match[1]) : "";
+
+    if (h2 && h3) return `${h2} / ${h3}`;
+    if (h2) return h2;
+
     const selectors: { pattern: RegExp; pick: (match: RegExpMatchArray) => string }[] =
       [
         {
@@ -434,13 +567,9 @@ class Provider {
           pick: (match) => this._stripTags(match[1]),
         },
         {
-          pattern: /<h2[^>]*>([\s\S]*?)<\/h2>/i,
-          pick: (match) => this._stripTags(match[1]),
-        },
-        {
           pattern:
             /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
-          pick: (match) => this._decodeHtml(match[1]).trim(),
+          pick: (match) => this._decodeHtml(match[1]).replace(/\s*—\s*Latanime.*$/i, "").trim(),
         },
       ];
 
@@ -452,14 +581,44 @@ class Provider {
     return "";
   }
 
+  private _shouldEnrichTitle(id: string, season: number): boolean {
+    if (season <= 1) return false;
+    return (
+      id.includes(`temporada-${season}`) ||
+      new RegExp(`-s${season}(?:-|$)`).test(id)
+    );
+  }
+
+  private async _enrichSearchTitles(
+    results: SearchResult[],
+    season: number,
+  ): Promise<void> {
+    const targets = results.filter((r) => this._shouldEnrichTitle(r.id, season));
+    const batchSize = 6;
+
+    for (let i = 0; i < targets.length; i += batchSize) {
+      await Promise.all(
+        targets.slice(i, i + batchSize).map(async (result) => {
+          const html = await this._fetchText(result.url);
+          if (!html) return;
+          const title = this._parseTitle(html);
+          if (!title) return;
+          result.title = title;
+          result.subOrDub = this._subOrDub(title);
+        }),
+      );
+    }
+  }
+
   private async _searchCandidateIds(
     opts: SearchOptions,
     synonyms: string[],
     spanishTitles: string[],
+    season: number,
   ): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
     const seen = new Set<string>();
-    const ids = this._candidateAnimeIds(opts, synonyms, spanishTitles).slice(
+    const ids = this._candidateAnimeIds(opts, synonyms, spanishTitles, season).slice(
       0,
       48,
     );
@@ -490,10 +649,11 @@ class Provider {
   async search(opts: SearchOptions): Promise<SearchResult[]> {
     const synonyms = await this._resolveSynonyms(opts);
     const spanishTitles = this._spanishTitles(synonyms);
+    const season = this._detectSeason(opts, synonyms);
     const merged: SearchResult[] = [];
     const seen = new Set<string>();
 
-    for (const query of this._searchQueries(opts, synonyms, spanishTitles)) {
+    for (const query of this._searchQueries(opts, synonyms, spanishTitles, season)) {
       const url = `${this.baseUrl}/buscar?q=${encodeURIComponent(query)}`;
       const html = await this._fetchText(url);
       const results = this._parseSearchResults(html);
@@ -503,19 +663,23 @@ class Provider {
         seen.add(result.id);
         merged.push(result);
       }
-
-      const filtered = this._filterByDub(merged, opts.dub);
-      if (filtered.length > 0) return filtered;
     }
-
-    if (merged.length > 0) return this._filterByDub(merged, opts.dub);
 
     const candidates = await this._searchCandidateIds(
       opts,
       synonyms,
       spanishTitles,
+      season,
     );
-    return this._filterByDub(candidates, opts.dub);
+    for (const result of candidates) {
+      if (seen.has(result.id)) continue;
+      seen.add(result.id);
+      merged.push(result);
+    }
+
+    await this._enrichSearchTitles(merged, season);
+    const sorted = this._sortSearchResults(merged, season);
+    return this._filterByDub(sorted, opts.dub);
   }
 
   async findEpisodes(id: string): Promise<EpisodeDetails[]> {
