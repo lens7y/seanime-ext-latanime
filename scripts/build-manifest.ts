@@ -9,6 +9,11 @@ const GITHUB_REF = Deno.env.get("GITHUB_REF") ?? "";
 
 const MANIFEST_BASENAME = "manifest.json";
 const SOURCE_PATH = "src/provider.ts";
+const ICON_PATH = "public/icon.png";
+
+function defaultIconUrl(): string {
+  return `https://raw.githubusercontent.com/${GITHUB_REPO}/main/${ICON_PATH}`;
+}
 
 type Manifest = {
   id: string;
@@ -70,7 +75,7 @@ function defaultManifest(
     type: "onlinestream-provider",
     language: "typescript",
     lang: "es",
-    icon: "https://latanime.org/favicon.ico",
+    icon: defaultIconUrl(),
     payloadURI: uris?.payloadURI ?? "",
     sourceHash,
   };
