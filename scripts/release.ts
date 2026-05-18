@@ -6,6 +6,7 @@ const FILES = [
   "src/provider.ts",
   "src/core.d.ts",
   "src/online-streaming-provider.d.ts",
+  "scripts/build-manifest.ts",
   "manifest.json",
 ];
 
