@@ -1,44 +1,36 @@
 #!/usr/bin/env -S deno run --allow-read=./ --allow-write=./
-/**
- * Build latanime-online-provider.json from latanime.ts.
- *
- * Usage:
- *   deno task build:manifest
- *   deno task build:manifest:patch
- *   deno run scripts/build-manifest.ts 0.1.2
- */
 
 const root = Deno.cwd();
+const SOURCE = `${root}/src/provider.ts`;
+const MANIFEST = `${root}/manifest.json`;
 
-const SOURCE = `${root}/latanime.ts`;
-const MANIFEST = `${root}/latanime-online-provider.json`;
+const GITHUB_REPO = Deno.env.get("GITHUB_REPO") ?? "lens7y/seanime-ext-latanime";
+const GITHUB_REF = Deno.env.get("GITHUB_REF") ?? "";
 
-type Manifest = Record<string, unknown> & {
+const MANIFEST_BASENAME = "manifest.json";
+const SOURCE_PATH = "src/provider.ts";
+
+type Manifest = {
+  id: string;
+  name: string;
+  description: string;
+  manifestURI: string;
   version: string;
-  payload: string;
+  author: string;
+  type: string;
+  language: string;
+  lang: string;
+  icon: string;
+  payloadURI: string;
+  sourceHash?: string;
 };
 
-type Args =
-  | { mode: "keep" }
-  | { mode: "patch" }
-  | { mode: "set"; version: string };
+function rawUrl(ref: string, file: string): string {
+  return `https://raw.githubusercontent.com/${GITHUB_REPO}/${ref}/${file}`;
+}
 
-function parseArgs(argv: string[]): Args {
-  if (argv.includes("--help") || argv.includes("-h")) {
-    console.log(`Usage:
-  deno task build:manifest
-  deno task build:manifest:patch
-  deno run scripts/build-manifest.ts [version]
-
-After bumping the version, publish with: deno task release`);
-    Deno.exit(0);
-  }
-
-  if (argv.includes("--patch")) return { mode: "patch" };
-
-  const version = argv.find((a) => !a.startsWith("-"));
-  if (version) return { mode: "set", version };
-  return { mode: "keep" };
+function latestManifestUri(): string {
+  return `https://github.com/${GITHUB_REPO}/releases/latest/download/${MANIFEST_BASENAME}`;
 }
 
 function bumpPatch(version: string): string {
@@ -50,70 +42,95 @@ function bumpPatch(version: string): string {
   return parts.join(".");
 }
 
-async function readManifest(file: string): Promise<Manifest> {
-  return JSON.parse(await Deno.readTextFile(file)) as Manifest;
+async function hashFile(path: string): Promise<string> {
+  const bytes = await Deno.readFile(path);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-function buildManifest(
-  base: Record<string, unknown>,
-  payload: string,
+function isReleaseRef(ref: string): boolean {
+  return ref.length > 0 && !ref.includes("heads/");
+}
+
+function defaultManifest(
   version: string,
+  sourceHash: string,
+  uris?: { manifestURI: string; payloadURI: string },
 ): Manifest {
-  return { ...base, version, payload } as Manifest;
-}
-
-async function main(): Promise<void> {
-  const args = parseArgs(Deno.args);
-
-  try {
-    await Deno.stat(SOURCE);
-  } catch {
-    console.error(`Source not found: latanime.ts`);
-    Deno.exit(1);
-  }
-
-  const payload = await Deno.readTextFile(SOURCE);
-  let base: Record<string, unknown> = {
+  return {
     id: "latanime-online-provider",
     name: "Latanime",
     description:
       "Latanime online streaming provider with Subs and Dubs in Spanish.",
-    manifestURI: "",
-    version: "0.1.0",
+    manifestURI: uris?.manifestURI ?? "",
+    version,
     author: "lens7y",
     type: "onlinestream-provider",
     language: "typescript",
     lang: "es",
     icon: "https://latanime.org/favicon.ico",
+    payloadURI: uris?.payloadURI ?? "",
+    sourceHash,
+  };
+}
+
+async function main(): Promise<void> {
+  if (Deno.args.includes("--help") || Deno.args.includes("-h")) {
+    console.log("Usage: deno task build:manifest\nEnv: GITHUB_REPO, GITHUB_REF (tag)");
+    Deno.exit(0);
+  }
+
+  try {
+    await Deno.stat(SOURCE);
+  } catch {
+    console.error(`Source not found: ${SOURCE_PATH}`);
+    Deno.exit(1);
+  }
+
+  const sourceHash = await hashFile(SOURCE);
+
+  let manifest: Manifest;
+  try {
+    manifest = JSON.parse(await Deno.readTextFile(MANIFEST)) as Manifest;
+  } catch {
+    manifest = defaultManifest("0.1.0", sourceHash);
+  }
+
+  const hashChanged = manifest.sourceHash !== sourceHash;
+  let version = manifest.version ?? "0.1.0";
+
+  if (hashChanged) {
+    if (manifest.sourceHash) {
+      version = bumpPatch(version);
+      console.log(`v${version}`);
+    }
+  }
+
+  const release = isReleaseRef(GITHUB_REF);
+  const uris = release
+    ? {
+        manifestURI: latestManifestUri(),
+        payloadURI: rawUrl(GITHUB_REF, SOURCE_PATH),
+      }
+    : {
+        manifestURI: manifest.manifestURI ?? "",
+        payloadURI: manifest.payloadURI ?? "",
+      };
+
+  const next: Manifest = {
+    ...defaultManifest(version, sourceHash, uris),
+    ...manifest,
+    version,
+    sourceHash,
+    ...uris,
   };
 
-  let current: Manifest | null = null;
-  try {
-    current = await readManifest(MANIFEST);
-    const { payload: _payload, ...rest } = current;
-    base = { ...base, ...rest };
-  } catch {
-    // no existing manifest
-  }
+  delete (next as Record<string, unknown>).payload;
+  if (release) delete next.sourceHash;
 
-  const currentVersion = current?.version ?? (base.version as string);
-  let nextVersion = currentVersion;
-
-  if (args.mode === "patch") {
-    nextVersion = bumpPatch(currentVersion);
-  } else if (args.mode === "set") {
-    nextVersion = args.version;
-  }
-
-  const manifest = buildManifest(base, payload, nextVersion);
-  await Deno.writeTextFile(
-    MANIFEST,
-    JSON.stringify(manifest, null, 2) + "\n",
-  );
-  console.log(`Wrote latanime-online-provider.json (v${nextVersion})`);
-  if (current && nextVersion !== currentVersion) {
-    console.log(`Publish with: deno task release`);
-  }
+  await Deno.writeTextFile(MANIFEST, JSON.stringify(next, null, 2) + "\n");
 }
 
 await main();

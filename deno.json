@@ -3,8 +3,8 @@
     "lib": ["deno.ns", "deno.window"]
   },
   "tasks": {
-    "build:manifest": "deno run --allow-read=./ --allow-write=./ scripts/build-manifest.ts",
-    "build:manifest:patch": "deno run --allow-read=./ --allow-write=./ scripts/build-manifest.ts --patch",
-    "release": "deno run --allow-read=./ --allow-run=gh scripts/release.ts"
+    "build:manifest": "deno run --allow-read=./ --allow-write=./ --allow-env=GITHUB_REPO,GITHUB_REF scripts/build-manifest.ts",
+    "release": "deno run --allow-read=./ --allow-write=./ --allow-run=git scripts/release.ts",
+    "release:push": "deno run --allow-read=./ --allow-write=./ --allow-run=git --allow-net scripts/release.ts --push"
   }
 }

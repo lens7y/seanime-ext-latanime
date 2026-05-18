@@ -1,54 +1,78 @@
-#!/usr/bin/env -S deno run --allow-read=./ --allow-run=gh
-/**
- * Create a GitHub release for the current manifest version.
- *
- * Usage:
- *   deno task release
- *   deno run scripts/release.ts --notes "Fix search"
- */
+#!/usr/bin/env -S deno run --allow-read=./ --allow-write=./ --allow-run=git
 
-const MANIFEST = `${Deno.cwd()}/latanime-online-provider.json`;
-const ASSET_NAME = "latanime-online-provider.json";
+import { tagFromManifest } from "./tag.ts";
 
-type Manifest = { version: string; name?: string };
+const ROOT = Deno.cwd();
+const FILES = [
+  "src/provider.ts",
+  "src/core.d.ts",
+  "src/online-streaming-provider.d.ts",
+  "manifest.json",
+];
 
-async function main(): Promise<void> {
-  const manifest = JSON.parse(
-    await Deno.readTextFile(MANIFEST),
-  ) as Manifest;
-  const version = manifest.version;
-  const tag = `v${version}`;
-
-  const notesIdx = Deno.args.indexOf("--notes");
-  const notes =
-    notesIdx >= 0 ? Deno.args[notesIdx + 1] : `Release ${tag}`;
-
-  const title = manifest.name
-    ? `${manifest.name} ${tag}`
-    : tag;
-
-  const cmd = new Deno.Command("gh", {
-    args: [
-      "release",
-      "create",
-      tag,
-      MANIFEST,
-      "--title",
-      title,
-      "--notes",
-      notes,
-    ],
-    stdout: "inherit",
+async function git(args: string[]): Promise<{ code: number; stdout: string }> {
+  const { code, stdout } = await new Deno.Command("git", {
+    args,
+    cwd: ROOT,
+    stdout: "piped",
     stderr: "inherit",
-  });
-
-  const { code } = await cmd.output();
-  if (code !== 0) {
-    console.error(`gh release create failed (exit ${code})`);
-    Deno.exit(code);
-  }
-
-  console.log(`Created ${tag} with asset ${ASSET_NAME}`);
+  }).output();
+  return { code, stdout: new TextDecoder().decode(stdout).trim() };
 }
 
-await main();
+async function runBuild(): Promise<void> {
+  const { code } = await new Deno.Command("deno", {
+    args: ["task", "build:manifest"],
+    cwd: ROOT,
+    stdout: "inherit",
+    stderr: "inherit",
+  }).output();
+  if (code !== 0) Deno.exit(code);
+}
+
+function parseArgs(argv: string[]): { message?: string; push: boolean } {
+  const push = argv.includes("--push");
+  const msgIdx = argv.indexOf("--");
+  const message = msgIdx >= 0 ? argv.slice(msgIdx + 1).join(" ").trim() : undefined;
+  return { message: message || undefined, push };
+}
+
+async function main(): Promise<void> {
+  const { message, push } = parseArgs(Deno.args);
+
+  await runBuild();
+
+  const dirty = await git(["status", "--porcelain", "--", ...FILES]);
+  if (dirty.stdout) {
+    await git(["add", ...FILES]);
+    const manifest = JSON.parse(await Deno.readTextFile(`${ROOT}/manifest.json`)) as {
+      version: string;
+    };
+    const commitMsg = message ?? `Release v${manifest.version}`;
+    const { code } = await new Deno.Command("git", {
+      args: ["commit", "-m", commitMsg],
+      cwd: ROOT,
+      stderr: "inherit",
+    }).output();
+    if (code !== 0) Deno.exit(code);
+  }
+
+  const tag = await tagFromManifest();
+
+  const pushCmd = `git push origin main && git push origin ${tag}`;
+  if (push) {
+    const { code } = await new Deno.Command("sh", {
+      args: ["-c", pushCmd],
+      cwd: ROOT,
+      stderr: "inherit",
+      stdout: "inherit",
+    }).output();
+    if (code !== 0) Deno.exit(code);
+  } else {
+    console.log(pushCmd);
+  }
+}
+
+if (import.meta.main) {
+  await main();
+}

@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+
+      - name: Verify tag matches manifest version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(jq -r .version manifest.json)
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "Tag v$TAG does not match manifest version $VERSION"
+            exit 1
+          fi
+
+      - name: Build release manifest
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref_name }}
+        run: deno task build:manifest
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            manifest.json
+            src/provider.ts
+          generate_release_notes: true
