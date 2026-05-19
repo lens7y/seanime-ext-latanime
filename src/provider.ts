@@ -47,18 +47,42 @@ const SERVER_URL_RULES: { needles: string[]; name: string }[] = [
   { needles: ["lulustream", "lulu"], name: "lulu" },
   { needles: ["listeamed"], name: "listeamed" },
   { needles: ["hlswish"], name: "hlswish" },
+  { needles: ["embedv"], name: "embedv" },
+  { needles: ["streamwish"], name: "streamwish" },
+  { needles: ["videobin"], name: "videobin" },
   { needles: ["voe.sx", "voe."], name: "voe" },
 ];
+
+/** Latanime button label → canonical name used in getSettings(). */
+const SERVER_LABEL_ALIASES: Record<string, string> = {
+  lulustream: "lulu",
+  "d-s": "doodstream",
+  mxdrop: "mixdrop",
+};
 
 const SERVER_ALIASES: Record<string, string[]> = {
   mxdrop: ["mixdrop"],
   mixdrop: ["mxdrop"],
+  doodstream: ["d-s"],
+  "d-s": ["doodstream"],
+  lulu: ["lulustream"],
+  lulustream: ["lulu"],
 };
 
-const PREFERRED_SERVERS = [
-  "mp4upload", "mxdrop", "voe", "lulu", "listeamed", "filemoon", "doodstream",
-  "mixdrop", "ok", "hlswish",
+const EPISODE_SERVER_NAMES = [
+  "mp4upload", "mxdrop", "mixdrop", "filemoon", "voe", "lulu", "lulustream", "listeamed",
+  "embedv", "d-s", "doodstream", "ok", "hlswish", "yourupload", "wolf", "uqload", "mega",
+  "streamwish", "videobin",
 ];
+
+const PREFERRED_SERVERS = [
+  "mp4upload", "mxdrop", "voe", "lulu", "lulustream", "listeamed", "filemoon", "embedv",
+  "d-s", "doodstream", "mixdrop", "ok", "uqload", "hlswish",
+];
+
+const EPISODE_PLAYER_CACHE_PREFIX = "latanime:episodePlayers:";
+
+const episodePlayerCache = new Map<string, Record<string, string>>();
 
 const DIRECT_STREAM_RULES: { pattern: RegExp; type: VideoSourceType }[] = [
   { pattern: /\.(m3u8)(?:$|\?)/i, type: "m3u8" },
@@ -770,10 +794,7 @@ class Provider {
 
   getSettings(): Settings {
     return {
-      episodeServers: [
-        "mp4upload", "mxdrop", "filemoon", "ok", "mixdrop", "doodstream",
-        "yourupload", "wolf", "mega", "uqload", "lulu", "listeamed", "hlswish", "voe",
-      ],
+      episodeServers: EPISODE_SERVER_NAMES,
       // Seanime dub toggle off: audio is picked in search() (latino → castellano → sub), not via opts.dub.
       supportsDub: false,
     };
@@ -836,30 +857,34 @@ class Provider {
     episode: EpisodeDetails,
     server: string,
   ): Promise<EpisodeServer> {
-    const html = await this._fetchText(episode.url);
-    if (!html) return { server, headers: {}, videoSources: [] };
-
-    const playerMap = this._extractPlayerUrls(html);
-    const requested = server.toLowerCase();
-    let resolvedServer = server;
-    let resolvedPlayerUrl = "";
-    let source: VideoSource | null = null;
-
-    for (const candidate of this._candidateServers(playerMap, requested)) {
-      const playerUrl = playerMap[candidate];
-      source = await this._resolveStream(playerUrl, episode.url);
-      if (source) {
-        resolvedServer = candidate;
-        resolvedPlayerUrl = playerUrl;
-        break;
-      }
-    }
-
-    return {
-      server: resolvedServer,
-      headers: source ? this._playbackHeaders(episode, resolvedPlayerUrl) : {},
-      videoSources: source ? [source] : [],
+    const empty: EpisodeServer = {
+      server: server.trim().toLowerCase() || server,
+      headers: {},
+      videoSources: [],
     };
+    if (!episode?.url || !this._isValidHttpUrl(episode.url)) return empty;
+
+    try {
+      const playerMap = await this._episodePlayerMap(episode.url);
+      const requested = server.trim().toLowerCase();
+      const candidates = this._candidateServers(playerMap, requested);
+
+      if (candidates.length === 0) return empty;
+
+      for (const name of candidates) {
+        const pick = await this._probeServer(name, playerMap, episode.url);
+        if (pick) {
+          return {
+            server: pick.server,
+            headers: this._playbackHeaders(episode, pick.playerUrl),
+            videoSources: [pick.source],
+          };
+        }
+      }
+      return empty;
+    } catch {
+      return empty;
+    }
   }
 
   private _headers(referer = this.baseUrl): { [key: string]: string } {
@@ -885,13 +910,18 @@ class Provider {
   }
 
   private async _fetchText(url: string, referer = this.baseUrl): Promise<string> {
-    const res = await fetch(url, {
-      credentials: "include",
-      headers: this._headers(referer),
-    });
-    if (!res.ok) return "";
-    const html = await res.text();
-    return CHALLENGE_MARKERS.some((m) => html.includes(m)) ? "" : html;
+    if (!this._isValidHttpUrl(url)) return "";
+    try {
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: this._headers(referer),
+      });
+      if (!res.ok) return "";
+      const html = await res.text();
+      return CHALLENGE_MARKERS.some((m) => html.includes(m)) ? "" : html;
+    } catch {
+      return "";
+    }
   }
 
   private async _runPool<T>(
@@ -1021,22 +1051,61 @@ class Provider {
     return "default";
   }
 
+  private _canonicalServerName(label: string): string {
+    const key = label.trim().toLowerCase().replace(/\s+/g, "");
+    return SERVER_LABEL_ALIASES[key] ?? key;
+  }
+
+  private _lookupPlayerUrl(
+    playerMap: Record<string, string>,
+    server: string,
+  ): string | undefined {
+    for (const name of [server, ...(SERVER_ALIASES[server] ?? [])]) {
+      const url = playerMap[name];
+      if (url) return url;
+    }
+    return undefined;
+  }
+
+  private _isValidHttpUrl(url: string): boolean {
+    try {
+      const u = new URL(url);
+      return u.protocol === "http:" || u.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  private _fixObfuscatedStreamUrl(url: string): string {
+    const fixed = url.replace(/\\/g, "").replace(/^j:/i, "https:");
+    return this._normalizePlayerUrl(fixed);
+  }
+
   private _origin(url: string): string {
     const match = url.match(/^(https?:\/\/[^/]+)/);
     return match ? match[1] : this.baseUrl;
   }
 
   private _decodeBase64(value: string): string {
+    const input = value
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .replace(/[^A-Za-z0-9+/=]/g, "");
+    if (!input) return "";
     try {
-      const input = value
-        .replace(/-/g, "+")
-        .replace(/_/g, "/")
-        .replace(/[^A-Za-z0-9+/=]/g, "");
-      if (!input) return "";
-      return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(input));
+      const decoded = atob(input);
+      if (decoded) return decoded;
     } catch {
-      return "";
+      // fall through to CryptoJS
     }
+    try {
+      if (typeof CryptoJS !== "undefined") {
+        return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(input));
+      }
+    } catch {
+      // ignore
+    }
+    return "";
   }
 
   private _normalizePlayerUrl(value: string): string {
@@ -1053,9 +1122,15 @@ class Provider {
     const map: Record<string, string> = {};
     const add = (rawUrl: string, server?: string) => {
       const url = this._normalizePlayerUrl(rawUrl);
-      if (!/^https?:\/\//.test(url)) return;
-      const key = (server || this._serverName(url)).toLowerCase();
-      if (!(key in map)) map[key] = url;
+      if (!this._isValidHttpUrl(url)) return;
+      const label = server?.trim().toLowerCase();
+      const canonical = label
+        ? this._canonicalServerName(label)
+        : this._serverName(url);
+      const keys = new Set([canonical, label, this._serverName(url)].filter(Boolean) as string[]);
+      for (const key of keys) {
+        if (key !== "default" && !(key in map)) map[key] = url;
+      }
     };
 
     for (const match of html.matchAll(
@@ -1092,22 +1167,92 @@ class Provider {
     return map;
   }
 
+  private async _episodePlayerMap(episodeUrl: string): Promise<Record<string, string>> {
+    const cacheKey = EPISODE_PLAYER_CACHE_PREFIX + episodeUrl;
+    if (typeof $store !== "undefined" && $store.has(cacheKey)) {
+      const stored = $store.get<Record<string, string>>(cacheKey);
+      if (stored && Object.keys(stored).length > 0) return stored;
+    }
+    const cached = episodePlayerCache.get(episodeUrl);
+    if (cached && Object.keys(cached).length > 0) return cached;
+
+    const html = await this._fetchText(episodeUrl);
+    const map = html ? this._extractPlayerUrls(html) : {};
+    if (Object.keys(map).length > 0) {
+      episodePlayerCache.set(episodeUrl, map);
+      if (typeof $store !== "undefined") {
+        $store.set(cacheKey, map);
+      }
+    }
+    return map;
+  }
+
   private _candidateServers(
     playerMap: Record<string, string>,
     requested: string,
   ): string[] {
-    if (requested) {
-      return [...new Set([requested, ...(SERVER_ALIASES[requested] ?? [])])].filter(
-        (name) => playerMap[name],
+    const server = requested.trim().toLowerCase();
+    if (server && server !== "default") {
+      return [...new Set([server, ...(SERVER_ALIASES[server] ?? [])])].filter(
+        (name) => this._lookupPlayerUrl(playerMap, name),
       );
     }
-    return [...new Set([...PREFERRED_SERVERS, ...Object.keys(playerMap)])].filter(
-      (name) => playerMap[name],
+    const onPage = Object.keys(playerMap).filter((k) => k !== "default");
+    return [...new Set([...PREFERRED_SERVERS, ...onPage])].filter(
+      (name) => this._lookupPlayerUrl(playerMap, name),
     );
+  }
+
+  private async _probeServer(
+    server: string,
+    playerMap: Record<string, string>,
+    referer: string,
+  ): Promise<{ server: string; playerUrl: string; source: VideoSource } | null> {
+    const playerUrl = this._lookupPlayerUrl(playerMap, server);
+    if (!playerUrl || !this._isValidHttpUrl(playerUrl)) return null;
+    try {
+      const source = await this._resolveStream(playerUrl, referer);
+      if (!source?.url || !this._isValidHttpUrl(source.url)) return null;
+      if (source.type !== "mp4" && source.type !== "m3u8") return null;
+      return { server, playerUrl, source };
+    } catch {
+      return null;
+    }
+  }
+
+  private _unpackCompactPackerScript(script: string): string | null {
+    if (!script.includes("while(c--)if(k[c])")) return null;
+    const open = script.indexOf("return p}('");
+    if (open < 0) return null;
+    const splitMark = script.indexOf(".split('|')", open);
+    if (splitMark < 0) return null;
+    const inner = script.slice(open + 11, splitMark);
+    const meta = inner.match(/,(\d{1,3}),(\d{1,3}),'/);
+    if (!meta || meta.index === undefined) return null;
+    let p = inner.slice(0, meta.index);
+    const radix = parseInt(meta[1], 10);
+    let count = parseInt(meta[2], 10);
+    const words = inner.slice(meta.index + meta[0].length).replace(/'+$/, "").split("|");
+    while (count--) {
+      if (words[count]) {
+        p = p.replace(new RegExp(`\\b${count.toString(radix)}\\b`, "g"), words[count]);
+      }
+    }
+    return p;
   }
 
   private _unpackPacker(source: string): string[] {
     const unpacked: string[] = [];
+    const pushUnpacked = (raw: string) => {
+      const text = raw.replace(/\\'/g, "'").replace(/\\"/g, '"');
+      if (text && !unpacked.includes(text)) unpacked.push(text);
+    };
+
+    for (const script of source.match(/<script[^>]*>[\s\S]*?<\/script>/gi) ?? []) {
+      const compact = this._unpackCompactPackerScript(script);
+      if (compact) pushUnpacked(compact);
+    }
+
     const scripts = [
       ...(source.match(/eval\(function\(p,a,c,k,e,[\s\S]+?\)\)/g) ?? []),
       ...(source.match(
@@ -1133,7 +1278,7 @@ class Provider {
           p = p.replace(new RegExp(`\\b${encode(count)}\\b`, "g"), words[count]);
         }
       }
-      unpacked.push(p.replace(/\\'/g, "'").replace(/\\"/g, '"'));
+      pushUnpacked(p);
     }
     return unpacked;
   }
@@ -1153,40 +1298,60 @@ class Provider {
     return { ...this._headers(referer), Origin: origin };
   }
 
+  private _extractStreamFromHtml(html: string): VideoSource | null {
+    for (const candidate of [html, ...this._unpackPacker(html)]) {
+      const hls = candidate.match(
+        /["'`]((?:https?:|j:)?\\?\/\\?\/[^"'`\s<>?#]+\.m3u8(?:\?[^"'`\s<>]*)?)["'`]/i,
+      ) ?? candidate.match(/(https?:\/\/[^"'`\s<>?#]+\.m3u8(?:\?[^"'`\s<>]*)?)/i);
+      if (hls) {
+        const url = this._fixObfuscatedStreamUrl(hls[1]);
+        if (this._isValidHttpUrl(url)) {
+          return { url, type: "m3u8", quality: "default", subtitles: [] };
+        }
+      }
+      const mp4 = candidate.match(
+        /(?:src|file|source)\s*:\s*["']((https?:\/\/[^"']+\.mp4[^"']*))["']/i,
+      ) ?? candidate.match(
+        /["'`]((?:https?:|j:)?\\?\/\\?\/[^"'`\s<>?#]+\.mp4(?:\?[^"'`\s<>]*)?)["'`]/i,
+      ) ?? candidate.match(/(https?:\/\/[^"'`\s<>?#]+\.mp4(?:\?[^"'`\s<>]*)?)/i);
+      if (mp4) {
+        const url = this._fixObfuscatedStreamUrl(mp4[1]);
+        if (this._isValidHttpUrl(url)) {
+          return { url, type: "mp4", quality: "default", subtitles: [] };
+        }
+      }
+    }
+    return null;
+  }
+
   private async _resolveStream(
     playerUrl: string,
     referer: string,
+    depth = 0,
   ): Promise<VideoSource | null> {
+    if (!this._isValidHttpUrl(playerUrl)) return null;
+
     for (const rule of DIRECT_STREAM_RULES) {
       if (rule.pattern.test(playerUrl)) {
         return { url: playerUrl, type: rule.type, quality: "default", subtitles: [] };
       }
     }
+
     const html = await this._fetchText(playerUrl, referer);
     if (!html) return null;
 
-    for (const candidate of [html, ...this._unpackPacker(html)]) {
-      const hls = candidate.match(
-        /["'`]((?:https?:)?\\?\/\\?\/[^"'`\s<>?#]+\.m3u8(?:\?[^"'`\s<>]*)?)["'`]/i,
-      );
-      if (hls) {
-        return {
-          url: this._normalizePlayerUrl(hls[1]),
-          type: "m3u8",
-          quality: "default",
-          subtitles: [],
-        };
-      }
-      const mp4 = candidate.match(
-        /["'`]((?:https?:)?\\?\/\\?\/[^"'`\s<>?#]+\.mp4(?:\?[^"'`\s<>]*)?)["'`]/i,
-      );
-      if (mp4) {
-        return {
-          url: this._normalizePlayerUrl(mp4[1]),
-          type: "mp4",
-          quality: "default",
-          subtitles: [],
-        };
+    const direct = this._extractStreamFromHtml(html);
+    if (direct) return direct;
+
+    if (depth < 2) {
+      for (const match of html.matchAll(
+        /<iframe\b[^>]+src=["']([^"']+)["'][^>]*>/gi,
+      )) {
+        const iframeUrl = this._normalizePlayerUrl(match[1]);
+        if (!this._isValidHttpUrl(iframeUrl)) continue;
+        if (/NONE|javascript:|about:/i.test(iframeUrl)) continue;
+        const nested = await this._resolveStream(iframeUrl, playerUrl, depth + 1);
+        if (nested) return nested;
       }
     }
     return null;
