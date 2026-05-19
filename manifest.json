@@ -3,12 +3,12 @@
   "name": "Latanime",
   "description": "Latanime online streaming provider for Seanime (Spanish dub; Latino preferred, sub fallback).",
   "manifestURI": "",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": "lens7y",
   "type": "onlinestream-provider",
   "language": "typescript",
   "lang": "es",
   "icon": "https://raw.githubusercontent.com/lens7y/seanime-ext-latanime/main/public/icon.png",
   "payloadURI": "",
-  "sourceHash": "14cb80bc20303d0349ccdfdbf11b2940cb4bbc567259876360ce67900fe08621"
+  "sourceHash": "559f11771e4fd4018a39659b85b22c8b4397d7a3314de34d031666fe85851a5d"
 }
