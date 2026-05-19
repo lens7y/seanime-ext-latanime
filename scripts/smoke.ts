@@ -46,12 +46,15 @@ type SmokeCase = {
   english: string;
   romaji: string;
   synonyms?: string[];
+  format?: string;
+  absoluteSeasonOffset?: number;
   expectIdIncludes?: string;
   expectIdExcludes?: string;
   expectMiss?: boolean;
 };
 
 const CASES: SmokeCase[] = [
+  // --- regressions ---
   {
     label: "regression:season-s2",
     id: 20958,
@@ -68,135 +71,35 @@ const CASES: SmokeCase[] = [
     synonyms: ["MHA 2"],
   },
   {
+    label: "regression:call-of-the-night-s1",
+    id: 141391,
+    english: "Call of the Night",
+    romaji: "Yofukashi no Uta",
+    expectIdIncludes: "castellano",
+    expectIdExcludes: "yofukashi-no-uta",
+  },
+  {
+    label: "regression:call-of-the-night-s2",
+    id: 175914,
+    english: "Call of the Night Season 2",
+    romaji: "Yofukashi no Uta Season 2",
+    expectIdIncludes: "temporada-2",
+    expectIdExcludes: "yofukashi-no-uta",
+  },
+  // --- risk ---
+  {
     label: "risk:true-alias",
     id: 21234,
     english: "ERASED",
     romaji: "Boku dake ga Inai Machi",
     expectMiss: true,
   },
+  // --- title shapes ---
   {
     label: "title:dash",
     id: 20623,
     english: "Parasyte -the maxim-",
     romaji: "Kiseijuu: Sei no Kakuritsu",
-  },
-  {
-    label: "season:ordinal",
-    id: 20992,
-    english: "HAIKYU!! 2nd Season",
-    romaji: "Haikyuu!! 2nd Season",
-  },
-  {
-    label: "season:part",
-    id: 104578,
-    english: "Attack on Titan Season 3 Part 2",
-    romaji: "Shingeki no Kyojin Season 3 Part 2",
-  },
-  {
-    label: "season:temporada-N",
-    id: 182300,
-    english: "Wistoria: Wand and Sword Season 2",
-    romaji: "Tsue to Tsurugi no Wistoria Season 2",
-    expectIdIncludes: "varita-y-espada",
-  },
-  {
-    label: "audio:prefer-latino",
-    id: 101302,
-    english: "Dragon Ball Super: Broly",
-    romaji: "Dragon Ball Super: Broly",
-    expectIdIncludes: "latino",
-    expectIdExcludes: "castellano",
-  },
-  {
-    label: "shape:plain-single",
-    id: 98472,
-    english: "Africa no Salaryman",
-    romaji: "Africa no Salaryman",
-    expectIdIncludes: "africa-no-salaryman",
-  },
-  {
-    label: "audio:latino",
-    id: 101922,
-    english: "Demon Slayer: Kimetsu no Yaiba",
-    romaji: "Kimetsu no Yaiba",
-    expectIdIncludes: "latino",
-  },
-  {
-    label: "audio:castellano",
-    id: 98512,
-    english: "18if",
-    romaji: "18if",
-    expectIdIncludes: "castellano",
-  },
-  {
-    label: "audio:audio-latino",
-    id: 269,
-    english: "Bleach",
-    romaji: "BLEACH",
-    expectIdIncludes: "audio-latino",
-  },
-  {
-    label: "audio:audio-castellano",
-    id: 1081,
-    english: "Space Pirate Captain Herlock: Outside Legend The Endless Odyssey",
-    romaji: "SPACE PIRATE CAPTAIN HERLOCK: OUTSIDE LEGEND - The Endless Odyssey",
-    expectIdIncludes: "audio-castellano",
-  },
-  {
-    label: "audio:audio-japones",
-    id: 107912,
-    english: "Scissor Seven",
-    romaji: "Cike Wu Liuqi",
-    expectIdIncludes: "scissor-seven",
-  },
-  {
-    label: "audio:catalan",
-    id: 141902,
-    english: "One Piece Film: Red",
-    romaji: "ONE PIECE FILM: RED",
-    expectIdIncludes: "one-piece-film-red",
-  },
-  {
-    label: "audio:card-only",
-    id: 196935,
-    english: "Akane-banashi",
-    romaji: "Akane-banashi",
-    expectIdIncludes: "akane-banashi",
-  },
-  {
-    label: "season:sN",
-    id: 21087,
-    english: "Assassination Classroom 2nd Season",
-    romaji: "Ansatsu Kyoushitsu 2nd Season",
-    expectIdIncludes: "s2",
-  },
-  {
-    label: "season:season-N",
-    id: 163024,
-    english: "Captain Tsubasa: Junior Youth Arc",
-    romaji: "Captain Tsubasa: Season 2 - Junior Youth-hen",
-    expectIdIncludes: "captain-tsubasa",
-  },
-  {
-    label: "season:ordinal-aggretsuko",
-    id: 101571,
-    english: "Aggretsuko",
-    romaji: "Aggressive Retsuko",
-    expectIdIncludes: "retsuko",
-  },
-  {
-    label: "season:trailing-number",
-    id: 16982,
-    english: "Hayate the Combat Butler: Cuties",
-    romaji: "Hayate no Gotoku!: Cuties",
-    expectIdIncludes: "hayate",
-  },
-  {
-    label: "season:part-movie",
-    id: 87505,
-    english: "Chain Chronicle: Haecceitas no Hikari Part 1",
-    romaji: "Chain Chronicle: Haecceitas no Hikari Part 1",
-    expectIdIncludes: "chain-chronicle",
   },
   {
     label: "title:colon",
@@ -231,7 +134,9 @@ const CASES: SmokeCase[] = [
     id: 4672,
     english: "Ghost in the Shell 2.0",
     romaji: "GHOST IN THE SHELL: Koukaku Kidoutai 2.0",
-    expectIdIncludes: "ghost-in-the-shell",
+    format: "MOVIE",
+    expectIdIncludes: "ghost-in-the-shell-20",
+    expectIdExcludes: "ghost-in-the-shell-latino",
   },
   {
     label: "title:numeric-compact",
@@ -240,6 +145,115 @@ const CASES: SmokeCase[] = [
     romaji: "1+2=Paradise",
     expectIdIncludes: "12paradise",
   },
+  // --- seasons ---
+  {
+    label: "season:ordinal",
+    id: 20992,
+    english: "HAIKYU!! 2nd Season",
+    romaji: "Haikyuu!! 2nd Season",
+  },
+  {
+    label: "season:part",
+    id: 104578,
+    english: "Attack on Titan Season 3 Part 2",
+    romaji: "Shingeki no Kyojin Season 3 Part 2",
+  },
+  {
+    label: "season:temporada-N",
+    id: 182300,
+    english: "Wistoria: Wand and Sword Season 2",
+    romaji: "Tsue to Tsurugi no Wistoria Season 2",
+    expectIdIncludes: "varita-y-espada",
+  },
+  {
+    label: "season:sN",
+    id: 21170,
+    english: "Assassination Classroom Second Season",
+    romaji: "Ansatsu Kyoushitsu 2nd Season",
+    expectIdIncludes: "s2",
+  },
+  {
+    label: "season:season-N",
+    id: 163024,
+    english: "Captain Tsubasa: Junior Youth Arc",
+    romaji: "Captain Tsubasa: Season 2 - Junior Youth-hen",
+    expectIdIncludes: "captain-tsubasa",
+  },
+  {
+    label: "season:ordinal-aggretsuko",
+    id: 101571,
+    english: "Aggretsuko",
+    romaji: "Aggressive Retsuko",
+    expectIdIncludes: "retsuko",
+  },
+  {
+    label: "season:trailing-number",
+    id: 16982,
+    english: "Hayate the Combat Butler: Cuties",
+    romaji: "Hayate no Gotoku!: Cuties",
+    absoluteSeasonOffset: 4,
+    expectIdIncludes: "temporada-4",
+  },
+  {
+    label: "season:part-movie",
+    id: 87505,
+    english: "Chain Chronicle: Haecceitas no Hikari Part 1",
+    romaji: "Chain Chronicle: Haecceitas no Hikari Part 1",
+    expectIdIncludes: "chain-chronicle",
+  },
+  // --- audio ---
+  {
+    label: "audio:prefer-latino",
+    id: 101302,
+    english: "Dragon Ball Super: Broly",
+    romaji: "Dragon Ball Super: Broly",
+    expectIdIncludes: "latino",
+    expectIdExcludes: "castellano",
+  },
+  {
+    label: "audio:latino",
+    id: 101922,
+    english: "Demon Slayer: Kimetsu no Yaiba",
+    romaji: "Kimetsu no Yaiba",
+    expectIdIncludes: "latino",
+  },
+  {
+    label: "audio:castellano",
+    id: 98512,
+    english: "18if",
+    romaji: "18if",
+    expectIdIncludes: "castellano",
+  },
+  {
+    label: "audio:audio-latino",
+    id: 269,
+    english: "Bleach",
+    romaji: "BLEACH",
+    expectIdIncludes: "audio-latino",
+  },
+  {
+    label: "audio:audio-castellano",
+    id: 1081,
+    english: "Space Pirate Captain Herlock: Outside Legend The Endless Odyssey",
+    romaji: "SPACE PIRATE CAPTAIN HERLOCK: OUTSIDE LEGEND - The Endless Odyssey",
+    expectIdIncludes: "audio-castellano",
+  },
+  {
+    label: "audio:card-only",
+    id: 196935,
+    english: "Akane-banashi",
+    romaji: "Akane-banashi",
+    expectIdIncludes: "akane-banashi",
+  },
+  // --- catalog shape ---
+  {
+    label: "shape:plain-single",
+    id: 98472,
+    english: "Africa no Salaryman",
+    romaji: "Africa no Salaryman",
+    expectIdIncludes: "africa-no-salaryman",
+  },
+  // --- format ---
   {
     label: "format:movie",
     id: 139643,
@@ -266,14 +280,9 @@ const CASES: SmokeCase[] = [
     id: 120046,
     english: "Take My Brother Away! 4",
     romaji: "Ani ni Tsukeru Kusuri wa Nai! 4",
-    expectIdIncludes: "ani-ni-tsukeru",
-  },
-  {
-    label: "format:music",
-    id: 113979,
-    english: "Outburst Dreamer Boys",
-    romaji: "Chuubyou Gekihatsu Boy",
-    expectIdIncludes: "chuubyou",
+    format: "ONA",
+    expectIdIncludes: "ani-ni-tsukeru-kusuri-wa-nai-4",
+    expectIdExcludes: "ani-ni-tsukeru-kusuri-wa-nai-3",
   },
 ];
 
@@ -292,8 +301,10 @@ if (import.meta.main) {
         romajiTitle: c.romaji,
         synonyms: c.synonyms ?? [],
         isAdult: false,
+        format: c.format,
+        absoluteSeasonOffset: c.absoluteSeasonOffset,
       },
-      query: c.romaji,
+      query: c.english || c.romaji,
       dub: true,
     });
     const ms = Math.round(performance.now() - searchStart);

@@ -2,7 +2,7 @@
 /// <reference path="./online-streaming-provider.d.ts" />
 
 const SLUG_SUFFIXES_DUB = ["latino", "castellano", "audio-latino", "audio-castellano"];
-const SLUG_SUFFIXES_SUB = ["japones", "audio-japones", "subtitulado", "catalan"];
+const SLUG_SUFFIXES_SUB = ["japones", "audio-japones", "subtitulado"];
 const CHALLENGE_MARKERS = [
   "Just a moment...",
   "cf_chl",
@@ -161,8 +161,7 @@ function detectSubOrDub(sources: {
     /\bcastellano\b/.test(text) ||
     /(?:^|-)castellano(?:-|$)/.test(text) ||
     /audio-castellano/.test(text);
-  const hasCatalan = /\bcatalan\b/.test(text);
-  const hasDub = hasLatino || hasCastellano || hasCatalan;
+  const hasDub = hasLatino || hasCastellano;
   const hasSub =
     /\bjapones\b/.test(text) ||
     /\bsubtitulado\b/.test(text) ||
@@ -175,8 +174,7 @@ function detectSubOrDub(sources: {
   if (
     /\b(anime|pelicula|ona|cartoon)\b/.test(text) &&
     !hasLatino &&
-    !hasCastellano &&
-    !hasCatalan
+    !hasCastellano
   ) {
     return "sub";
   }
@@ -187,7 +185,6 @@ function dubVariantRank(result: SearchResult): number {
   const text = normalizeAudioText(result.title, result.id);
   if (/\blatino\b/.test(text) || /(?:^|-)latino(?:-|$)/.test(text)) return 30;
   if (/\bcastellano\b/.test(text) || /(?:^|-)castellano(?:-|$)/.test(text)) return 20;
-  if (/\bcatalan\b/.test(text)) return 15;
   if (/\bjapones\b/.test(text) || /(?:^|-)japones(?:-|$)/.test(text)) return 8;
   if (/\bsubtitulado\b/.test(text)) return 6;
   if (result.subOrDub === "sub") return 4;
@@ -195,10 +192,34 @@ function dubVariantRank(result: SearchResult): number {
   return 0;
 }
 
-function compareSearchCandidates(a: SearchCandidate, b: SearchCandidate): number {
+function compareSearchCandidates(
+  a: SearchCandidate,
+  b: SearchCandidate,
+  intent?: SearchIntent,
+): number {
+  if (intent) {
+    const aBare = isBareSubListing(a, intent);
+    const bBare = isBareSubListing(b, intent);
+    if (aBare !== bBare) return aBare ? 1 : -1;
+  }
   const scoreDiff = (b.score ?? 0) - (a.score ?? 0);
   if (scoreDiff !== 0) return scoreDiff;
   return dubVariantRank(b) - dubVariantRank(a);
+}
+
+function finalizeSearchResults(
+  ranked: SearchCandidate[],
+  intent: SearchIntent,
+): SearchResult[] {
+  const winner = ranked[0];
+  if (!winner) return [];
+  const media = intent.opts.media;
+  const title = media?.englishTitle?.trim() ||
+    media?.romajiTitle?.trim() ||
+    intent.opts.query?.trim() ||
+    intent.titles[0] ||
+    winner.title;
+  return [{ id: winner.id, title, url: winner.url, subOrDub: winner.subOrDub }];
 }
 
 function mediaTitles(opts: SearchOptions): string[] {
@@ -267,6 +288,8 @@ function titleBaseForSlug(title: string): string {
 
 function detectSeason(opts: SearchOptions): number {
   let season = -1;
+  const offset = opts.media?.absoluteSeasonOffset;
+  if (offset != null && offset > 0) season = offset;
   for (const title of mediaTitles(opts)) {
     const found = extractSeasonNumber(title);
     if (found > season) season = found;
@@ -286,7 +309,7 @@ function primarySlugKeys(opts: SearchOptions): string[] {
 }
 
 function slugHasSeasonMarker(slug: string): boolean {
-  return /-temporada-\d+|-s\d+(?:-|$)|-season-\d+/.test(slug);
+  return /-temporada-\d+|-s\d+(?:-|$)|-season-\d+|-\d{1,2}$/.test(slug);
 }
 
 function idSeasonNumber(id: string): number {
@@ -296,6 +319,8 @@ function idSeasonNumber(id: string): number {
   if (sSuffix) return parseInt(sSuffix[1], 10);
   const seasonTag = id.match(/-season-(\d+)(?:-|$)/);
   if (seasonTag) return parseInt(seasonTag[1], 10);
+  const entry = id.match(/-(\d{1,2})$/);
+  if (entry) return parseInt(entry[1], 10);
   return -1;
 }
 
@@ -350,6 +375,12 @@ function slugVariants(value: string, season = -1): string[] {
   variants.add(slug.replace(/(\d)-([a-z])/g, "$1$2"));
   variants.add(slug.replace(/([a-z])-(\d)/g, "$1$2"));
   variants.add(slug.replace(/^(\d+)([a-z]+)$/, "$1-$2"));
+  for (const dotted of value.matchAll(/\b(\d+)\.(\d+)\b/g)) {
+    const compact = `${dotted[1]}${dotted[2]}`;
+    variants.add(slugify(value.replace(`${dotted[1]}.${dotted[2]}`, compact)));
+    variants.add(slug.replace(`${dotted[1]}-${dotted[2]}`, compact));
+    variants.add(slug.replace(`${dotted[1]}.${dotted[2]}`, compact));
+  }
 
   for (const rule of SEASON_SLUG_RULES) {
     const match = slug.match(rule.pattern);
@@ -567,6 +598,42 @@ function buildCandidateMatch(
   };
 }
 
+function hasExplicitDubAudio(candidate: SearchResult): boolean {
+  return dubVariantRank(candidate) >= 20;
+}
+
+function isBareSubListing(candidate: SearchCandidate, intent: SearchIntent): boolean {
+  if (candidate.subOrDub !== "sub" || hasExplicitDubAudio(candidate)) return false;
+  const base = stripAudioSuffix(candidate.id);
+  const matchesFranchiseSlug = intent.titles.some((title) => {
+    for (const source of [title, titleBaseForSlug(title), compactShowName(title)]) {
+      const slug = slugify(source);
+      if (!slug) continue;
+      if (candidate.id === slug || base === slug || candidate.id.startsWith(`${slug}-`)) {
+        return true;
+      }
+    }
+    return false;
+  });
+  const onPrimary = intent.primarySlugs.some((slug) =>
+    candidate.id === slug || base === slug
+  );
+  return onPrimary || matchesFranchiseSlug;
+}
+
+function isSeasonlessPrimaryFranchise(
+  candidate: SearchCandidate,
+  intent: SearchIntent,
+): boolean {
+  if (intent.season <= 1) return false;
+  const base = stripAudioSuffix(candidate.id);
+  return intent.primarySlugs.some((slug) =>
+    (candidate.id === slug || base === slug) &&
+    !slugHasSeasonMarker(candidate.id) &&
+    idSeasonNumber(candidate.id) <= 0
+  );
+}
+
 function mergeCandidates(candidates: SearchCandidate[]): SearchCandidate[] {
   const byId = new Map<string, SearchCandidate>();
   for (const candidate of candidates) {
@@ -602,6 +669,9 @@ function isSafeCandidate(
     return false;
   }
   if (intent.season <= 1 && idSeasonNumber(candidate.id) > 1 && !m.exactSlugHit) {
+    return false;
+  }
+  if (isSeasonlessPrimaryFranchise(candidate, intent)) {
     return false;
   }
   if (
@@ -646,8 +716,7 @@ function rankCandidate(
   let score = 0;
 
   if (m.exactSlug) {
-    const hasDubSlug = dubVariantRank(candidate) > 0;
-    score += !intent.opts.dub || hasDubSlug ? 60 : 28;
+    score += dubVariantRank(candidate) > 0 ? 60 : 28;
   } else if (m.generatedAudio || candidate.source === "slug") {
     score += 45;
   }
@@ -655,10 +724,11 @@ function rankCandidate(
 
   const primarySlugMatch = intent.primarySlugs.includes(candidate.id) ||
     intent.primarySlugs.includes(m.candidateBase);
+  const barePrimarySub = isBareSubListing(candidate, intent);
   const primarySeasonSafe = intent.season <= 1 ||
     (slugHasSeasonMarker(candidate.id) &&
       slugMatchesTargetSeason(candidate.id, intent.season));
-  if (primarySlugMatch && primarySeasonSafe) score += 45;
+  if (primarySlugMatch && primarySeasonSafe) score += barePrimarySub ? 12 : 45;
 
   score += seasonMatchScore(candidate.id, intent.season);
   score += Math.min(36, m.sharedTokens * 12);
@@ -666,24 +736,17 @@ function rankCandidate(
   if (intent.wantsMovie && candidateHasFormatSignal(candidate, "movie")) score += 12;
   if (intent.wantsSpecial && candidateHasFormatSignal(candidate, "special")) score += 12;
   if (candidate.source === "slug") score += 8;
-  score += Math.min(12, dubVariantRank(candidate));
+  score += dubVariantRank(candidate);
+  if (barePrimarySub) score -= 25;
+  for (const title of intent.titles) {
+    const dotted = title.match(/\b(\d+)\.(\d+)\b/);
+    if (!dotted) continue;
+    const compact = `${dotted[1]}${dotted[2]}`;
+    if (candidate.id.includes(compact)) score += 35;
+  }
 
   candidate.score = score;
   return candidate;
-}
-
-function bestSearchScore(
-  candidates: SearchCandidate[],
-  intent: SearchIntent,
-  slugProbes: string[],
-): number {
-  let best = 0;
-  for (const raw of mergeCandidates(candidates)) {
-    if (!isSafeCandidate(raw, intent, slugProbes)) continue;
-    const ranked = rankCandidate({ ...raw }, intent, slugProbes);
-    best = Math.max(best, ranked.score ?? 0);
-  }
-  return best;
 }
 
 function shouldStopFetching(
@@ -691,7 +754,14 @@ function shouldStopFetching(
   intent: SearchIntent,
   slugProbes: string[],
 ): boolean {
-  return bestSearchScore(candidates, intent, slugProbes) >= SEARCH_STOP_SCORE;
+  for (const raw of mergeCandidates(candidates)) {
+    if (!isSafeCandidate(raw, intent, slugProbes)) continue;
+    const ranked = rankCandidate({ ...raw }, intent, slugProbes);
+    if ((ranked.score ?? 0) >= SEARCH_STOP_SCORE && hasExplicitDubAudio(ranked)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // deno-lint-ignore no-unused-vars
@@ -713,11 +783,13 @@ class Provider {
     const intent = buildSearchIntent({ ...opts, dub: true });
     const queries = buildSearchQueries(intent);
     const slugProbes = buildSlugProbes(intent);
-    return mergeCandidates(await this._fetchSearchCandidates(intent, queries, slugProbes))
+    const ranked = mergeCandidates(
+      await this._fetchSearchCandidates(intent, queries, slugProbes),
+    )
       .filter((c) => isSafeCandidate(c, intent, slugProbes))
       .map((c) => rankCandidate(c, intent, slugProbes))
-      .sort(compareSearchCandidates)
-      .map(({ id, title, url, subOrDub }) => ({ id, title, url, subOrDub }));
+      .sort((a, b) => compareSearchCandidates(a, b, intent));
+    return finalizeSearchResults(ranked, intent);
   }
 
   async findEpisodes(id: string): Promise<EpisodeDetails[]> {
