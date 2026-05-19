@@ -1,12 +1,8 @@
 /// <reference path="./core.d.ts" />
 /// <reference path="./online-streaming-provider.d.ts" />
 
-const DUB_MARKERS = [
-  "latino",
-  "audio latino",
-  "audio castellano",
-  "castellano",
-];
+const SLUG_SUFFIXES_DUB = ["latino", "castellano", "audio-latino", "audio-castellano"];
+const SLUG_SUFFIXES_SUB = ["japones"];
 
 const CHALLENGE_MARKERS = [
   "Just a moment...",
@@ -26,13 +22,7 @@ const SPANISH_PARTICLES = new Set([
   "una",
 ]);
 
-const SLUG_SUFFIXES = [
-  "latino",
-  "castellano",
-  "japones",
-  "audio-latino",
-  "audio-castellano",
-];
+const SLUG_SUFFIXES = [...SLUG_SUFFIXES_DUB, ...SLUG_SUFFIXES_SUB];
 
 const SERVER_URL_RULES: { needles: string[]; name: string }[] = [
   { needles: ["filemoon"], name: "filemoon" },
@@ -125,7 +115,7 @@ class Provider {
         "hlswish",
         "voe",
       ],
-      supportsDub: true,
+      supportsDub: false,
     };
   }
 
@@ -168,9 +158,88 @@ class Provider {
       .replace(/\/+$/, "");
   }
 
-  private _subOrDub(title: string): SubOrDub {
-    const lower = title.toLowerCase();
-    return DUB_MARKERS.some((marker) => lower.includes(marker)) ? "dub" : "sub";
+  private _normalizeAudioText(...parts: (string | undefined)[]): string {
+    return parts
+      .filter(Boolean)
+      .join(" ")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
+
+  private _detectSubOrDub(sources: {
+    title?: string;
+    id?: string;
+    badge?: string;
+    spanLabel?: string;
+  }): SubOrDub {
+    const text = this._normalizeAudioText(
+      sources.title,
+      sources.id,
+      sources.badge,
+      sources.spanLabel,
+    );
+    if (!text) return "sub";
+
+    const hasLatino =
+      /\blatino\b/.test(text) ||
+      /(?:^|-)latino(?:-|$)/.test(text) ||
+      /audio-latino/.test(text);
+    const hasCastellano =
+      /\bcastellano\b/.test(text) ||
+      /(?:^|-)castellano(?:-|$)/.test(text) ||
+      /audio-castellano/.test(text);
+    const hasCatalan = /\bcatalan\b/.test(text);
+    const hasDub = hasLatino || hasCastellano || hasCatalan;
+
+    const hasSub =
+      /\bjapones\b/.test(text) ||
+      /\bsubtitulado\b/.test(text) ||
+      /(?:^|-)japones(?:-|$)/.test(text) ||
+      /\baudio\s+japones\b/.test(text);
+
+    if (hasDub && hasSub) return "both";
+    if (hasDub) return "dub";
+    if (hasSub) return "sub";
+
+    if (
+      /\b(anime|pelicula|ona|cartoon)\b/.test(text) &&
+      !hasLatino &&
+      !hasCastellano &&
+      !hasCatalan
+    ) {
+      return "sub";
+    }
+
+    return "sub";
+  }
+
+  private _dubVariantRank(result: SearchResult): number {
+    const text = this._normalizeAudioText(result.title, result.id);
+    if (/\blatino\b/.test(text) || /(?:^|-)latino(?:-|$)/.test(text)) return 30;
+    if (/\bcastellano\b/.test(text) || /(?:^|-)castellano(?:-|$)/.test(text)) {
+      return 20;
+    }
+    if (/\bcatalan\b/.test(text)) return 15;
+    if (result.subOrDub === "dub" || result.subOrDub === "both") return 10;
+    return 0;
+  }
+
+  private _parseSeriesDetailsLabel(html: string): string {
+    const idx = html.search(/\bseriedetails\b/i);
+    if (idx < 0) return "";
+    const slice = html.slice(idx, idx + 2500);
+    const spans = [...slice.matchAll(/<span[^>]*>([\s\S]*?)<\/span>/gi)];
+    const labels = spans
+      .map((m) => this._stripTags(m[1]))
+      .filter((s) => s && s.length < 80);
+    return labels.join(" ");
+  }
+
+
+  private _parseSearchCardBadge(inner: string): string {
+    const withoutH3 = inner.replace(/<h3[\s\S]*?<\/h3>/gi, "");
+    return this._stripTags(withoutH3).replace(/\s+\d{4}\s*$/, "").trim();
   }
 
   private _looksSpanish(title: string): boolean {
@@ -228,6 +297,7 @@ class Provider {
     }
     const patterns = [
       /\bseason\s*(\d+)\b/i,
+      /\bS(\d{1,2})\b/,
       /\bs(\d{1,2})\b/i,
       /\b(\d+)(?:st|nd|rd|th)\s+season\b/i,
       /\btemporada\s*(\d+)\b/i,
@@ -237,7 +307,68 @@ class Provider {
       const match = title.match(pattern);
       if (match) return parseInt(match[1], 10);
     }
+    const trailing = title.match(/\s(\d{1,2})$/);
+    if (trailing) {
+      const n = parseInt(trailing[1], 10);
+      if (n >= 1 && n <= 30) return n;
+    }
+    // Kaguya-sama: Love is War? (AniList S2 title — "?" not a season digit)
+    if (/\blove\s+is\s+war\s*\?+\s*$/i.test(title)) return 2;
     return -1;
+  }
+
+  private _stripSeasonFromTitle(title: string): string {
+    return title
+      .replace(/\b(?:season|temporada)\s*\d+(?:\s*part\s*\d+)?\b/gi, "")
+      .replace(/\b\d+(?:st|nd|rd|th)\s+season(?:\s*part\s*\d+)?\b/gi, "")
+      .replace(/\bpart\s+\d+\b/gi, "")
+      .replace(/\s+\d{1,2}$/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /** Short Latanime slugs (e.g. parasyte-latino, love-is-war) from English/romaji titles. */
+  private _franchiseSlugHints(...titles: (string | undefined)[]): string[] {
+    const hints = new Set<string>();
+
+    for (const title of titles) {
+      if (!title) continue;
+      const cleaned = title.replace(/\?+$/g, "").trim();
+      if (!cleaned) continue;
+
+      const colonPart = cleaned.split(":")[1]?.trim();
+      if (colonPart && colonPart.length >= 3) {
+        const slug = this._slugify(colonPart);
+        if (slug) hints.add(slug);
+      }
+
+      const dashLead = cleaned.match(/^([^-:]{2,48}?)\s*-\s*/);
+      if (dashLead) {
+        const slug = this._slugify(dashLead[1]);
+        if (slug) hints.add(slug);
+      }
+
+      const beforeColon = cleaned.split(":")[0]?.trim();
+      if (beforeColon && beforeColon.length >= 3) {
+        const slug = this._slugify(beforeColon);
+        if (slug) hints.add(slug);
+      }
+    }
+
+    return [...hints];
+  }
+
+  private _franchiseSearchTerms(...titles: (string | undefined)[]): string[] {
+    const terms: string[] = [];
+    const seen = new Set<string>();
+    for (const slug of this._franchiseSlugHints(...titles)) {
+      const term = slug.replace(/-/g, " ");
+      const key = term.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      terms.push(term);
+    }
+    return terms;
   }
 
   private _detectSeason(opts: SearchOptions, synonyms: string[]): number {
@@ -258,7 +389,8 @@ class Provider {
 
   private _compactShowName(title: string): string {
     const base = title.split(/[:(]/)[0]?.trim() ?? title.trim();
-    return base || title.trim();
+    const stripped = this._stripSeasonFromTitle(base);
+    return stripped || base || title.trim();
   }
 
   private _spanishTitles(synonyms: string[]): string[] {
@@ -297,12 +429,20 @@ class Provider {
     const romaji = opts.media?.romajiTitle ?? "";
 
     add(english);
+    for (const term of this._franchiseSearchTerms(english, romaji, opts.query)) {
+      add(term);
+    }
     if (season > 1) {
       const short = this._compactShowName(english);
       if (short) {
         add(`${short} S${season}`);
         add(`${short} temporada ${season}`);
         add(`${short} Season ${season}`);
+      }
+      const romajiShort = this._compactShowName(romaji);
+      if (romajiShort && romajiShort.toLowerCase() !== short?.toLowerCase()) {
+        add(`${romajiShort} S${season}`);
+        add(`${romajiShort} ${season}`);
       }
       if (typeof $scannerUtils !== "undefined" && english) {
         const seasonQuery = $scannerUtils.buildSeasonQuery(english, season);
@@ -327,6 +467,7 @@ class Provider {
 
   private _titleBaseForSlug(title: string): string {
     return title
+      .replace(/\s*-\s*the\s+maxim\s*-?\s*/gi, " ")
       .replace(
         /\b(?:audio\s+)?(?:latino|castellano|japones|japonés|subtitulado)\b/gi,
         " ",
@@ -415,10 +556,31 @@ class Provider {
         for (const slug of this._slugVariants(source, season)) {
           this._addSlugCandidates(candidates, slug);
         }
+        for (const hint of this._franchiseSlugHints(source)) {
+          this._addSlugCandidates(candidates, hint);
+        }
       }
     }
 
-    return [...candidates];
+    return this._prioritizeCandidateIds([...candidates], season);
+  }
+
+  private _prioritizeCandidateIds(ids: string[], season: number): string[] {
+    if (season <= 1) return ids;
+
+    const score = (id: string): number => {
+      let s = 0;
+      if (new RegExp(`-s${season}(?:-|$)`).test(id)) s += 20;
+      if (id.includes(`-temporada-${season}`)) s += 18;
+      if (id.includes(`-season-${season}`)) s += 16;
+      // Combined multi-season pages (love-is-war = S1 y S2)
+      if (!/-s\d+(?:-|$)|-temporada-\d|-season-\d/.test(id)) s += 12;
+      if (id.includes("-latino")) s += 5;
+      if (id.includes("-castellano")) s += 3;
+      return s;
+    };
+
+    return [...ids].sort((a, b) => score(b) - score(a));
   }
 
   private _idSeasonNumber(id: string): number {
@@ -434,8 +596,15 @@ class Provider {
   private _sortSearchResults(
     results: SearchResult[],
     season: number,
+    opts: SearchOptions,
   ): SearchResult[] {
-    const score = (id: string): number => {
+    const hints = this._franchiseSlugHints(
+      opts.media?.englishTitle ?? "",
+      opts.media?.romajiTitle ?? "",
+      opts.query,
+    );
+
+    const seasonScore = (id: string): number => {
       const idSeason = this._idSeasonNumber(id);
       if (season > 1) {
         if (idSeason === season) return 20;
@@ -447,13 +616,33 @@ class Provider {
       return 0;
     };
 
-    return [...results].sort((a, b) => score(b.id) - score(a.id));
+    const franchiseScore = (id: string): number => {
+      let best = 0;
+      for (const hint of hints) {
+        if (id === `${hint}-latino` || id === `${hint}-castellano`) {
+          best = Math.max(best, 25);
+        } else if (id === hint) {
+          best = Math.max(best, 22);
+        } else if (id.startsWith(`${hint}-`)) {
+          best = Math.max(best, 12);
+        }
+      }
+      return best;
+    };
+
+    return [...results].sort((a, b) => {
+      const seasonDiff = seasonScore(b.id) - seasonScore(a.id);
+      if (seasonDiff !== 0) return seasonDiff;
+      const franchiseDiff = franchiseScore(b.id) - franchiseScore(a.id);
+      if (franchiseDiff !== 0) return franchiseDiff;
+      return this._dubVariantRank(b) - this._dubVariantRank(a);
+    });
   }
 
-  private _filterByDub(results: SearchResult[], dub: boolean): SearchResult[] {
-    if (!dub) return results;
-    const dubTypes: SubOrDub[] = ["dub", "both"];
-    return results.filter((result) => dubTypes.includes(result.subOrDub));
+  private _pickAudioResults(results: SearchResult[]): SearchResult[] {
+    const dub = results.filter((r) => r.subOrDub === "dub" || r.subOrDub === "both");
+    if (dub.length > 0) return dub;
+    return results.filter((r) => r.subOrDub === "sub");
   }
 
   private _serverName(url: string): string {
@@ -531,13 +720,14 @@ class Provider {
       if (!title || title.toLowerCase() === "image") continue;
 
       title = title.replace(/\s+(0\.0|\d{4})$/, "").trim();
+      const badge = this._parseSearchCardBadge(inner);
 
       seen.add(id);
       results.push({
         id,
         title,
         url: href,
-        subOrDub: this._subOrDub(title),
+        subOrDub: this._detectSubOrDub({ title, id, badge }),
       });
     }
 
@@ -604,7 +794,12 @@ class Provider {
           const title = this._parseTitle(html);
           if (!title) return;
           result.title = title;
-          result.subOrDub = this._subOrDub(title);
+          const spanLabel = this._parseSeriesDetailsLabel(html);
+          result.subOrDub = this._detectSubOrDub({
+            title,
+            id: result.id,
+            spanLabel,
+          });
         }),
       );
     }
@@ -620,7 +815,7 @@ class Provider {
     const seen = new Set<string>();
     const ids = this._candidateAnimeIds(opts, synonyms, spanishTitles, season).slice(
       0,
-      48,
+      64,
     );
     const batchSize = 6;
 
@@ -632,12 +827,13 @@ class Provider {
           if (!html || !html.includes("/ver/") || seen.has(id)) return;
 
           const title = this._parseTitle(html) || id.replace(/-/g, " ");
+          const spanLabel = this._parseSeriesDetailsLabel(html);
           seen.add(id);
           results.push({
             id,
             title,
             url,
-            subOrDub: this._subOrDub(title),
+            subOrDub: this._detectSubOrDub({ title, id, spanLabel }),
           });
         }),
       );
@@ -678,8 +874,8 @@ class Provider {
     }
 
     await this._enrichSearchTitles(merged, season);
-    const sorted = this._sortSearchResults(merged, season);
-    return this._filterByDub(sorted, opts.dub);
+    const sorted = this._sortSearchResults(merged, season, opts);
+    return this._pickAudioResults(sorted);
   }
 
   async findEpisodes(id: string): Promise<EpisodeDetails[]> {

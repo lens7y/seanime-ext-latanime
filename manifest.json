@@ -1,7 +1,7 @@
 {
   "id": "latanime-online-provider",
   "name": "Latanime",
-  "description": "Latanime online streaming provider for Seanime (Spanish sub/dub).",
+  "description": "Latanime online streaming provider for Seanime (Spanish dub; Latino preferred, sub fallback).",
   "manifestURI": "",
   "version": "0.1.6",
   "author": "lens7y",

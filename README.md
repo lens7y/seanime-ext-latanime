@@ -1,6 +1,6 @@
 # Latanime — Seanime Online Streaming Provider
 
-Online streaming provider for [Latanime](https://latanime.org/) (Spanish sub/dub).
+Online streaming provider for [Latanime](https://latanime.org/) (Spanish dub — prefers Latino, then Castellano; sub when dub is unavailable).
 
 ## Install
 
