@@ -27,6 +27,22 @@ function parseArgs(argv: string[]): { message?: string; push: boolean } {
   return { message: message || undefined, push };
 }
 
+async function runPreflight(): Promise<void> {
+  for (const [label, args] of [
+    ["Typecheck", ["check", "src/provider.ts"]],
+    ["Smoke test", ["task", "test:smoke"]],
+  ] as const) {
+    console.log(`\n${label}…`);
+    const { code } = await new Deno.Command("deno", {
+      args: [...args],
+      cwd: ROOT,
+      stderr: "inherit",
+      stdout: "inherit",
+    }).output();
+    if (code !== 0) Deno.exit(code);
+  }
+}
+
 async function main(): Promise<void> {
   const { message, push } = parseArgs(Deno.args);
 
@@ -46,6 +62,8 @@ async function main(): Promise<void> {
     }).output();
     if (code !== 0) Deno.exit(code);
   }
+
+  await runPreflight();
 
   const tag = await tagFromManifest();
 

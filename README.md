@@ -1,36 +1,52 @@
 # Latanime — Seanime Online Streaming Provider
 
-Online streaming provider for [Latanime](https://latanime.org/) (Spanish dub — prefers Latino, then Castellano; sub when dub is unavailable).
+Seanime extension that streams from [Latanime](https://latanime.org/). Dub preference: Latino, then Castellano; Japanese/sub when no dub is listed.
 
 ## Install
 
+Manifest URL:
+
 `https://github.com/lens7y/seanime-ext-latanime/releases/latest/download/manifest.json`
 
-Seanime → Extensions → add from URL. Older versions: [Releases](https://github.com/lens7y/seanime-ext-latanime/releases).
+In Seanime: **Extensions → Add from URL**. Previous builds: [Releases](https://github.com/lens7y/seanime-ext-latanime/releases).
 
 ## Development
 
-Edit `src/provider.ts`. [Provider API](https://seanime.gitbook.io/seanime-extensions/content-providers/online-streaming-provider).
+Source: `src/provider.ts`. API reference: [Online streaming provider](https://seanime.gitbook.io/seanime-extensions/content-providers/online-streaming-provider).
 
 ```bash
 deno task dev
 ```
 
-Seanime → Extensions → add from URL (install link printed by the task).
+Serves a dev manifest; use the printed URL in Seanime. Individual methods can be exercised in the Seanime playground with a copy of `src/provider.ts`.
 
-Playground: paste `src/provider.ts` to test methods.
+## Testing
+
+```bash
+deno check src/provider.ts
+deno task test:smoke
+```
+
+`scripts/smoke.ts` — live search checks against Latanime (network required). Same steps run in CI on `main` and in `deno task release` before tagging.
+
+Offline catalog tooling: `.dev/`
 
 ## Release
-
-`deno task release` updates `manifest.json` (version bump when source changed), commits, tags, then prints a push command.
 
 ```bash
 deno task release -- "message"
 deno task release:push -- "message"
 ```
 
-CI publishes release assets on tag push.
+1. Bump `manifest.json` when provider sources changed  
+2. Commit release files  
+3. `deno check` + smoke  
+4. Annotated tag `v{version}`  
 
-## Servers
+Push the tag to trigger [.github/workflows/release.yml](.github/workflows/release.yml) (manifest build + GitHub Release assets).
 
-mp4upload, mxdrop, filemoon, ok, mixdrop, doodstream, yourupload, wolf, mega, uqload, lulu, listeamed, hlswish, voe — availability varies by episode.
+## Episode servers
+
+mp4upload, mxdrop, filemoon, ok, mixdrop, doodstream, yourupload, wolf, mega, uqload, lulu, listeamed, hlswish, voe
+
+Per-episode availability varies on Latanime.

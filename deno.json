@@ -12,7 +12,8 @@
       "read": ["./"],
       "write": ["./"],
       "env": ["GITHUB_REPO", "GITHUB_REF"],
-      "run": ["git", "sh"]
+      "run": ["git", "sh", "deno"],
+      "net": true
     },
     "release-push": {
       "read": ["./"],
@@ -26,6 +27,11 @@
       "write": ["./"],
       "env": ["DEV_PORT", "DEV_HOST"],
       "net": true
+    },
+    "test": {
+      "read": ["./"],
+      "write": ["./.test-artifacts"],
+      "net": true
     }
   },
   "tasks": {
@@ -34,6 +40,7 @@
     "release:push": "deno run -P=release-push scripts/release.ts --push",
     "dev": "deno task dev:manifest && deno task dev:serve",
     "dev:manifest": "deno run -P=dev scripts/dev-manifest.ts",
-    "dev:serve": "deno run -P=dev scripts/dev-serve.ts"
+    "dev:serve": "deno run -P=dev scripts/dev-serve.ts",
+    "test:smoke": "deno run -P=test scripts/smoke.ts"
   }
 }
