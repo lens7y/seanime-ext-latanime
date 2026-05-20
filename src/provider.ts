@@ -51,6 +51,10 @@ const SERVER_URL_RULES: { needles: string[]; name: string }[] = [
   { needles: ["streamwish"], name: "streamwish" },
   { needles: ["videobin"], name: "videobin" },
   { needles: ["voe.sx", "voe."], name: "voe" },
+  { needles: ["dsvplay", "dsplay"], name: "dsvplay" },
+  { needles: ["bysekoze"], name: "byse" },
+  { needles: ["hexload"], name: "hexload" },
+  { needles: ["savefiles"], name: "savefiles" },
 ];
 
 /** Latanime button label → canonical name used in getSettings(). */
@@ -58,7 +62,11 @@ const SERVER_LABEL_ALIASES: Record<string, string> = {
   lulustream: "lulu",
   "d-s": "doodstream",
   mxdrop: "mixdrop",
+  bysekoze: "byse",
+  dsplay: "dsvplay",
 };
+
+const VOE_BAIT_HOSTS = /test-videos\.co\.uk|bigbuckbunny/i;
 
 const SERVER_ALIASES: Record<string, string[]> = {
   mxdrop: ["mixdrop"],
@@ -69,20 +77,31 @@ const SERVER_ALIASES: Record<string, string[]> = {
   lulustream: ["lulu"],
 };
 
+/** Seanime probes each name; proven Latanime hosts first. */
 const EPISODE_SERVER_NAMES = [
-  "mp4upload", "mxdrop", "mixdrop", "filemoon", "voe", "lulu", "lulustream", "listeamed",
-  "embedv", "d-s", "doodstream", "ok", "hlswish", "yourupload", "wolf", "uqload", "mega",
+  "mp4upload", "mxdrop", "mixdrop", "uqload",
+  "voe", "mega", "dsvplay", "hexload", "savefiles", "byse",
+  "lulu", "lulustream", "filemoon", "listeamed", "embedv",
+  "d-s", "doodstream", "ok", "hlswish", "yourupload", "wolf",
   "streamwish", "videobin",
 ];
 
 const PREFERRED_SERVERS = [
-  "mp4upload", "mxdrop", "voe", "lulu", "lulustream", "listeamed", "filemoon", "embedv",
-  "d-s", "doodstream", "mixdrop", "ok", "uqload", "hlswish",
+  "mp4upload", "mxdrop", "mixdrop", "uqload", "voe", "lulu", "lulustream",
+  "listeamed", "filemoon", "embedv", "d-s", "doodstream", "ok", "hlswish",
 ];
 
 const EPISODE_PLAYER_CACHE_PREFIX = "latanime:episodePlayers:";
+const STREAM_CACHE_PREFIX = "latanime:streams:";
+const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+
+type CachedEpisodeServer = {
+  result: EpisodeServer;
+  expiresAt: number;
+};
 
 const episodePlayerCache = new Map<string, Record<string, string>>();
+const streamCache = new Map<string, CachedEpisodeServer>();
 
 const DIRECT_STREAM_RULES: { pattern: RegExp; type: VideoSourceType }[] = [
   { pattern: /\.(m3u8)(?:$|\?)/i, type: "m3u8" },
@@ -857,29 +876,36 @@ class Provider {
     episode: EpisodeDetails,
     server: string,
   ): Promise<EpisodeServer> {
+    const requested = server.trim().toLowerCase();
     const empty: EpisodeServer = {
-      server: server.trim().toLowerCase() || server,
+      server: requested || server,
       headers: {},
       videoSources: [],
     };
     if (!episode?.url || !this._isValidHttpUrl(episode.url)) return empty;
 
-    try {
-      const playerMap = await this._episodePlayerMap(episode.url);
-      const requested = server.trim().toLowerCase();
-      const candidates = this._candidateServers(playerMap, requested);
+    const cached = this._readStreamCache(episode.url, requested);
+    if (cached) return cached;
 
+    try {
+      const manifest = await this._episodeManifest(episode.url);
+      const candidates = this._candidateServers(manifest, requested);
       if (candidates.length === 0) return empty;
 
       for (const name of candidates) {
-        const pick = await this._probeServer(name, playerMap, episode.url);
-        if (pick) {
-          return {
-            server: pick.server,
-            headers: this._playbackHeaders(episode, pick.playerUrl),
-            videoSources: [pick.source],
-          };
+        const pick = await this._probeServer(name, manifest, episode.url);
+        if (!pick) continue;
+
+        const result: EpisodeServer = {
+          server: pick.server,
+          headers: this._playbackHeaders(episode, pick.playerUrl),
+          videoSources: [pick.source],
+        };
+        this._writeStreamCache(episode.url, requested, result);
+        if (requested === "default" || !requested) {
+          this._writeStreamCache(episode.url, pick.server, result);
         }
+        return result;
       }
       return empty;
     } catch {
@@ -1167,7 +1193,8 @@ class Provider {
     return map;
   }
 
-  private async _episodePlayerMap(episodeUrl: string): Promise<Record<string, string>> {
+  /** Episode watch page → canonical server name → embed URL. */
+  private async _episodeManifest(episodeUrl: string): Promise<Record<string, string>> {
     const cacheKey = EPISODE_PLAYER_CACHE_PREFIX + episodeUrl;
     if (typeof $store !== "undefined" && $store.has(cacheKey)) {
       const stored = $store.get<Record<string, string>>(cacheKey);
@@ -1185,6 +1212,46 @@ class Provider {
       }
     }
     return map;
+  }
+
+  private _streamCacheKey(episodeUrl: string, server: string): string {
+    return `${episodeUrl}|${server || "default"}`;
+  }
+
+  private _readStreamCache(episodeUrl: string, server: string): EpisodeServer | null {
+    const key = this._streamCacheKey(episodeUrl, server);
+    const mem = streamCache.get(key);
+    if (mem) {
+      if (mem.expiresAt > Date.now()) return mem.result;
+      streamCache.delete(key);
+    }
+    if (typeof $store === "undefined") return null;
+    const storeKey = STREAM_CACHE_PREFIX + key;
+    if (!$store.has(storeKey)) return null;
+    const stored = $store.get<CachedEpisodeServer>(storeKey);
+    if (!stored) return null;
+    if (stored.expiresAt > Date.now()) {
+      streamCache.set(key, stored);
+      return stored.result;
+    }
+    return null;
+  }
+
+  private _writeStreamCache(
+    episodeUrl: string,
+    server: string,
+    result: EpisodeServer,
+  ): void {
+    if (result.videoSources.length === 0) return;
+    const key = this._streamCacheKey(episodeUrl, server);
+    const entry: CachedEpisodeServer = {
+      result,
+      expiresAt: Date.now() + STREAM_CACHE_TTL_MS,
+    };
+    streamCache.set(key, entry);
+    if (typeof $store !== "undefined") {
+      $store.set(STREAM_CACHE_PREFIX + key, entry);
+    }
   }
 
   private _candidateServers(
@@ -1298,6 +1365,111 @@ class Provider {
     return { ...this._headers(referer), Origin: origin };
   }
 
+  private _isVoeBaitUrl(url: string): boolean {
+    return VOE_BAIT_HOSTS.test(url);
+  }
+
+  private _sourceFromStreamUrl(url: string): VideoSource | null {
+    const fixed = this._fixObfuscatedStreamUrl(url);
+    if (!this._isValidHttpUrl(fixed) || this._isVoeBaitUrl(fixed)) return null;
+    const type: VideoSourceType = /\.m3u8/i.test(fixed) ? "m3u8" : "mp4";
+    return { url: fixed, type, quality: "default", subtitles: [] };
+  }
+
+  private _deobfuscateVoeJson(raw: string): unknown {
+    try {
+      const arr = JSON.parse(raw) as unknown;
+      if (!Array.isArray(arr) || typeof arr[0] !== "string") return null;
+      const rot13 = (text: string): string =>
+        text.replace(/[a-zA-Z]/g, (c) => {
+          const base = c <= "Z" ? 65 : 97;
+          return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+        });
+      const stripMarkers = (text: string): string => {
+        let out = text;
+        for (const marker of ["@$", "^^", "~@", "%?", "*~", "!!", "#&"]) {
+          out = out.split(marker).join("");
+        }
+        return out;
+      };
+      const shiftChars = (text: string, shift: number): string =>
+        [...text].map((c) => String.fromCharCode(c.charCodeAt(0) - shift)).join("");
+      const b64 = (value: string): string => {
+        const pad = value.length % 4 ? "=".repeat(4 - (value.length % 4)) : "";
+        return atob(value + pad);
+      };
+
+      let step = rot13(arr[0]);
+      step = stripMarkers(step);
+      step = b64(step);
+      step = shiftChars(step, 3);
+      step = step.split("").reverse().join("");
+      step = b64(step);
+      try {
+        return JSON.parse(step);
+      } catch {
+        return step;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  private _extractVoeStream(html: string): VideoSource | null {
+    const varSource = html.match(/var\s+source\s*=\s*['"]([^'"]+)['"]/i)?.[1];
+    if (varSource) {
+      const fromVar = this._sourceFromStreamUrl(varSource);
+      if (fromVar) return fromVar;
+    }
+
+    const jsonScript = html.match(
+      /<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i,
+    )?.[1]?.trim();
+    if (jsonScript) {
+      const decoded = this._deobfuscateVoeJson(jsonScript);
+      if (decoded && typeof decoded === "object") {
+        const record = decoded as Record<string, unknown>;
+        for (const key of ["direct_access_url", "source", "hls"]) {
+          const value = record[key];
+          if (typeof value === "string") {
+            const fromJson = this._sourceFromStreamUrl(value);
+            if (fromJson) return fromJson;
+          }
+        }
+      }
+      if (typeof decoded === "string") {
+        const m3u8 = decoded.match(/https?:\/\/[^\s"']+\.m3u8[^\s"']*/i)?.[0];
+        if (m3u8) {
+          const fromHls = this._sourceFromStreamUrl(m3u8);
+          if (fromHls) return fromHls;
+        }
+        const mp4 = decoded.match(/https?:\/\/[^\s"']+\.mp4[^\s"']*/i)?.[0];
+        if (mp4) {
+          const fromMp4 = this._sourceFromStreamUrl(mp4);
+          if (fromMp4) return fromMp4;
+        }
+      }
+    }
+
+    const hlsField = html.match(/"hls"\s*:\s*"([^"]+)"/i)?.[1];
+    if (hlsField) {
+      const fromField = this._sourceFromStreamUrl(hlsField);
+      if (fromField) return fromField;
+    }
+
+    return null;
+  }
+
+  private _voeMirrorUrl(playerUrl: string, html: string): string {
+    if (!/voe\.sx/i.test(playerUrl)) return playerUrl;
+    const redirect = html.match(
+      /window\.location\.href\s*=\s*['"]([^'"]+)['"]/i,
+    )?.[1];
+    if (!redirect) return playerUrl;
+    const absolute = this._normalizePlayerUrl(redirect);
+    return this._isValidHttpUrl(absolute) ? absolute : playerUrl;
+  }
+
   private _extractStreamFromHtml(html: string): VideoSource | null {
     for (const candidate of [html, ...this._unpackPacker(html)]) {
       const hls = candidate.match(
@@ -1337,8 +1509,20 @@ class Provider {
       }
     }
 
-    const html = await this._fetchText(playerUrl, referer);
+    let embedUrl = playerUrl;
+    let html = await this._fetchText(embedUrl, referer);
     if (!html) return null;
+
+    embedUrl = this._voeMirrorUrl(embedUrl, html);
+    if (embedUrl !== playerUrl) {
+      html = await this._fetchText(embedUrl, embedUrl);
+      if (!html) return null;
+    }
+
+    if (/voe\.sx/i.test(playerUrl) || html.includes('type="application/json"')) {
+      const voe = this._extractVoeStream(html);
+      if (voe) return voe;
+    }
 
     const direct = this._extractStreamFromHtml(html);
     if (direct) return direct;
@@ -1350,7 +1534,7 @@ class Provider {
         const iframeUrl = this._normalizePlayerUrl(match[1]);
         if (!this._isValidHttpUrl(iframeUrl)) continue;
         if (/NONE|javascript:|about:/i.test(iframeUrl)) continue;
-        const nested = await this._resolveStream(iframeUrl, playerUrl, depth + 1);
+        const nested = await this._resolveStream(iframeUrl, embedUrl, depth + 1);
         if (nested) return nested;
       }
     }
