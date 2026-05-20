@@ -57,7 +57,6 @@ const SERVER_URL_RULES: { needles: string[]; name: string }[] = [
   { needles: ["savefiles"], name: "savefiles" },
 ];
 
-/** Latanime button label → canonical name used in getSettings(). */
 const SERVER_LABEL_ALIASES: Record<string, string> = {
   lulustream: "lulu",
   "d-s": "doodstream",
@@ -68,6 +67,8 @@ const SERVER_LABEL_ALIASES: Record<string, string> = {
 
 const VOE_BAIT_HOSTS = /test-videos\.co\.uk|bigbuckbunny/i;
 
+const UQLOAD_MIRROR_HOSTS = ["uqload.is", "uqload.com"];
+
 const SERVER_ALIASES: Record<string, string[]> = {
   mxdrop: ["mixdrop"],
   mixdrop: ["mxdrop"],
@@ -77,7 +78,6 @@ const SERVER_ALIASES: Record<string, string[]> = {
   lulustream: ["lulu"],
 };
 
-/** Seanime probes each name; proven Latanime hosts first. */
 const EPISODE_SERVER_NAMES = [
   "mp4upload", "mxdrop", "mixdrop", "uqload",
   "voe", "mega", "dsvplay", "hexload", "savefiles", "byse",
@@ -1460,6 +1460,191 @@ class Provider {
     return null;
   }
 
+  private _isUqloadEmbedUrl(url: string): boolean {
+    return /uqload/i.test(url);
+  }
+
+  private _uqloadMirrorUrls(playerUrl: string): string[] {
+    const urls = [playerUrl];
+    if (!this._isUqloadEmbedUrl(playerUrl)) return urls;
+    try {
+      const parsed = new URL(playerUrl);
+      const path = `${parsed.pathname}${parsed.search}`;
+      for (const host of UQLOAD_MIRROR_HOSTS) {
+        if (parsed.hostname.toLowerCase() !== host) {
+          urls.push(`${parsed.protocol}//${host}${path}`);
+        }
+      }
+    } catch {
+      return urls;
+    }
+    return [...new Set(urls)];
+  }
+
+  private _isDoodEmbedUrl(url: string): boolean {
+    return /dood(?:stream)?|d0000d|ds2play|playmogo/i.test(url);
+  }
+
+  private _isFilemoonEmbedUrl(url: string): boolean {
+    return /filemoon|bysekoze/i.test(url);
+  }
+
+  private _filemoonVideoCode(url: string): string | null {
+    const match = url.match(/\/(?:e|d)\/([^/?#]+)/i);
+    const code = match?.[1]?.replace(/\/+$/, "");
+    return code || null;
+  }
+
+  private _base64UrlDecode(input: string): Uint8Array {
+    let padded = input.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = (4 - (padded.length % 4)) % 4;
+    if (pad) padded += "=".repeat(pad);
+    const bin = atob(padded);
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  }
+
+  private _combineKeyParts(keyParts: string[]): Uint8Array {
+    const chunks = keyParts.map((part) => this._base64UrlDecode(part));
+    const total = chunks.reduce((n, chunk) => n + chunk.length, 0);
+    const key = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      key.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return key;
+  }
+
+  private _toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    const copy = new Uint8Array(bytes.length);
+    copy.set(bytes);
+    return copy.buffer;
+  }
+
+  private async _decryptFilemoonPlayback(
+    playback: { key_parts: string[]; iv: string; payload: string },
+  ): Promise<{ sources?: { mime_type?: string; url?: string }[] } | null> {
+    try {
+      const keyBytes = this._combineKeyParts(playback.key_parts);
+      const key = await crypto.subtle.importKey(
+        "raw",
+        this._toArrayBuffer(keyBytes),
+        { name: "AES-GCM" },
+        false,
+        ["decrypt"],
+      );
+      const iv = this._base64UrlDecode(playback.iv);
+      const payload = this._base64UrlDecode(playback.payload);
+      const tag = payload.slice(-16);
+      const ciphertext = payload.slice(0, -16);
+      const combined = new Uint8Array(ciphertext.length + tag.length);
+      combined.set(ciphertext);
+      combined.set(tag, ciphertext.length);
+      const plain = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: this._toArrayBuffer(iv) },
+        key,
+        this._toArrayBuffer(combined),
+      );
+      return JSON.parse(new TextDecoder().decode(plain));
+    } catch {
+      return null;
+    }
+  }
+
+  private async _resolveFilemoonStream(
+    playerUrl: string,
+    _referer: string,
+  ): Promise<VideoSource | null> {
+    if (!this._isFilemoonEmbedUrl(playerUrl)) return null;
+    const code = this._filemoonVideoCode(playerUrl);
+    if (!code) return null;
+
+    try {
+      const embedUrl = this._absoluteUrl(playerUrl);
+      const origin = this._origin(embedUrl);
+      const apiUrl = `${origin}/api/videos/${code}`;
+      const res = await fetch(apiUrl, {
+        headers: { ...this._headers(embedUrl), Referer: embedUrl },
+      });
+      if (!res.ok) return null;
+
+      const data = await res.json() as {
+        playback?: { key_parts?: string[]; iv?: string; payload?: string };
+        error?: string;
+      };
+      const playback = data.playback;
+      if (!playback?.key_parts?.length || !playback.iv || !playback.payload) return null;
+
+      const decrypted = await this._decryptFilemoonPlayback({
+        key_parts: playback.key_parts,
+        iv: playback.iv,
+        payload: playback.payload,
+      });
+      if (!decrypted?.sources?.length) return null;
+
+      for (const source of decrypted.sources) {
+        const url = source.url?.trim();
+        if (!url || !this._isValidHttpUrl(url)) continue;
+        if (source.mime_type === "application/vnd.apple.mpegurl" || /\.m3u8/i.test(url)) {
+          return { url, type: "m3u8", quality: "default", subtitles: [] };
+        }
+        if (/\.mp4/i.test(url)) {
+          return { url, type: "mp4", quality: "default", subtitles: [] };
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private _doodRandomSuffix(): string {
+    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(10));
+    return [...bytes].map((b) => chars[b % chars.length]).join("");
+  }
+
+  private async _resolveDoodStream(
+    playerUrl: string,
+    referer: string,
+  ): Promise<VideoSource | null> {
+    if (!this._isDoodEmbedUrl(playerUrl)) return null;
+    try {
+      const res = await fetch(playerUrl, {
+        credentials: "include",
+        redirect: "follow",
+        headers: this._headers(referer),
+      });
+      if (!res.ok) return null;
+      const html = await res.text();
+      if (CHALLENGE_MARKERS.some((m) => html.includes(m))) return null;
+
+      const passPath = html.match(/(\/pass_md5\/[^'"]+)/)?.[1];
+      if (!passPath) return null;
+
+      const expiry = passPath.match(/-(\d{10})-/)?.[1];
+      const token = html.match(/[?&]token=([a-zA-Z0-9%._-]+)/)?.[1]
+        ?? passPath.split("/").pop();
+      if (!expiry || !token) return null;
+
+      const embedUrl = res.url;
+      const passUrl = new URL(passPath, new URL(embedUrl).origin).href;
+      const passRes = await fetch(passUrl, {
+        headers: { ...this._headers(embedUrl), Referer: embedUrl },
+      });
+      if (!passRes.ok) return null;
+
+      const base = (await passRes.text()).trim();
+      if (!base.startsWith("http")) return null;
+
+      const streamUrl = `${base}${this._doodRandomSuffix()}?token=${token}&expiry=${expiry}`;
+      if (!this._isValidHttpUrl(streamUrl)) return null;
+      return { url: streamUrl, type: "mp4", quality: "default", subtitles: [] };
+    } catch {
+      return null;
+    }
+  }
+
   private _voeMirrorUrl(playerUrl: string, html: string): string {
     if (!/voe\.sx/i.test(playerUrl)) return playerUrl;
     const redirect = html.match(
@@ -1509,8 +1694,25 @@ class Provider {
       }
     }
 
+    if (this._isDoodEmbedUrl(playerUrl)) {
+      const dood = await this._resolveDoodStream(playerUrl, referer);
+      if (dood) return dood;
+    }
+
+    if (this._isFilemoonEmbedUrl(playerUrl)) {
+      const filemoon = await this._resolveFilemoonStream(playerUrl, referer);
+      if (filemoon) return filemoon;
+    }
+
     let embedUrl = playerUrl;
-    let html = await this._fetchText(embedUrl, referer);
+    let html = "";
+    for (const candidate of this._uqloadMirrorUrls(playerUrl)) {
+      html = await this._fetchText(candidate, referer);
+      if (html) {
+        embedUrl = candidate;
+        break;
+      }
+    }
     if (!html) return null;
 
     embedUrl = this._voeMirrorUrl(embedUrl, html);
