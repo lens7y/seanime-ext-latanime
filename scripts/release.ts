@@ -7,7 +7,12 @@ const FILES = [
   "src/core.d.ts",
   "src/online-streaming-provider.d.ts",
   "scripts/build-manifest.ts",
+  "scripts/load-provider.ts",
+  "scripts/smoke.ts",
+  "scripts/stream-smoke.ts",
+  "scripts/release.ts",
   "manifest.json",
+  "README.md",
 ];
 
 async function git(args: string[]): Promise<{ code: number; stdout: string }> {
@@ -31,6 +36,7 @@ async function runPreflight(): Promise<void> {
   for (const [label, args] of [
     ["Typecheck", ["check", "src/provider.ts"]],
     ["Smoke test", ["task", "test:smoke"]],
+    ["Stream smoke", ["task", "test:stream"]],
   ] as const) {
     console.log(`\n${label}…`);
     const { code } = await new Deno.Command("deno", {

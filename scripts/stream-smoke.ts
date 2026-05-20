@@ -1,40 +1,7 @@
 /// <reference path="../src/core.d.ts" />
 /// <reference path="../src/online-streaming-provider.d.ts" />
 
-// @ts-ignore: CryptoJS is injected by Seanime at runtime
-globalThis.CryptoJS = {
-  enc: {
-    Utf8: { stringify: () => "" },
-    Base64: { parse: () => new Uint8Array() },
-  },
-} as CryptoJS;
-
-type ProviderCtor = new () => AnimeProvider;
-
-async function loadProvider(): Promise<ProviderCtor> {
-  const providerUrl = new URL("../src/provider.ts", import.meta.url);
-  let code = await Deno.readTextFile(providerUrl);
-  code = code
-    .replace(
-      '/// <reference path="./core.d.ts" />',
-      '/// <reference path="../src/core.d.ts" />',
-    )
-    .replace(
-      '/// <reference path="./online-streaming-provider.d.ts" />',
-      '/// <reference path="../src/online-streaming-provider.d.ts" />',
-    )
-    .trimEnd() +
-    "\n\n(globalThis as Record<string, unknown>).Provider = Provider;\n";
-
-  const entryUrl = new URL("../.test-artifacts/stream-smoke-entry.ts", import.meta.url);
-  await Deno.mkdir(new URL("../.test-artifacts/", import.meta.url), { recursive: true });
-  await Deno.writeTextFile(entryUrl, code);
-  await import(entryUrl.href);
-
-  const ctor = (globalThis as { Provider?: ProviderCtor }).Provider;
-  if (!ctor) throw new Error("Provider not registered after loading test entry");
-  return ctor;
-}
+import { loadProvider } from "./load-provider.ts";
 
 type StreamCase = {
   label: string;
@@ -122,8 +89,8 @@ const CASES: StreamCase[] = [
   },
 ];
 
-const ProviderCtor = await loadProvider();
-const provider = new ProviderCtor();
+const Provider = await loadProvider();
+const provider = new Provider();
 const t0 = performance.now();
 let failed = 0;
 

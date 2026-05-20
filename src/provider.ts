@@ -61,8 +61,6 @@ const SERVER_LABEL_ALIASES: Record<string, string> = {
   lulustream: "lulu",
   "d-s": "doodstream",
   mxdrop: "mixdrop",
-  bysekoze: "byse",
-  dsplay: "dsvplay",
 };
 
 const VOE_BAIT_HOSTS = /test-videos\.co\.uk|bigbuckbunny/i;
@@ -86,21 +84,18 @@ const SERVER_ALIASES: Record<string, string[]> = {
   lulustream: ["lulu"],
 };
 
-const EPISODE_SERVER_NAMES = [
-  "mp4upload", "mxdrop", "mixdrop", "uqload",
-  "voe", "mega", "dsvplay", "hexload", "savefiles", "byse",
-  "lulu", "lulustream", "filemoon", "listeamed", "embedv",
-  "d-s", "doodstream", "ok", "hlswish", "yourupload", "wolf",
-  "streamwish", "videobin",
-];
-
 const PREFERRED_SERVERS = [
   "mp4upload", "mxdrop", "mixdrop", "uqload", "voe", "lulu", "lulustream",
-  "listeamed", "filemoon", "embedv", "d-s", "doodstream", "ok", "hlswish",
+  "filemoon", "d-s", "doodstream", "ok",
 ];
 
+const EPISODE_SERVER_NAMES = [...new Set([
+  ...PREFERRED_SERVERS,
+  ...Object.keys(SERVER_ALIASES),
+])];
+const EPISODE_SERVER_SET = new Set(EPISODE_SERVER_NAMES);
+
 const EPISODE_PLAYER_CACHE_PREFIX = "latanime:episodePlayers:";
-const STREAM_CACHE_PREFIX = "latanime:streams:";
 const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type CachedEpisodeServer = {
@@ -822,8 +817,7 @@ class Provider {
   getSettings(): Settings {
     return {
       episodeServers: EPISODE_SERVER_NAMES,
-      // Seanime dub toggle off: audio is picked in search() (latino → castellano → sub), not via opts.dub.
-      supportsDub: false,
+      supportsDub: false, // audio picked in search(), not opts.dub
     };
   }
 
@@ -1134,16 +1128,13 @@ class Provider {
       const decoded = atob(input);
       if (decoded) return decoded;
     } catch {
-      // fall through to CryptoJS
     }
+    if (typeof CryptoJS === "undefined") return "";
     try {
-      if (typeof CryptoJS !== "undefined") {
-        return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(input));
-      }
+      return CryptoJS.enc.Utf8.stringify(CryptoJS.enc.Base64.parse(input));
     } catch {
-      // ignore
+      return "";
     }
-    return "";
   }
 
   private _normalizePlayerUrl(value: string): string {
@@ -1176,36 +1167,12 @@ class Provider {
     )) {
       add(match[1], stripTags(match[2]));
     }
-    for (const match of html.matchAll(/<iframe\b[^>]+src=["']([^"']+)["'][^>]*>/gi)) {
-      add(match[1]);
-    }
-    for (const match of html.matchAll(
-      /["'](?:url|src|file|embed)["']\s*:\s*["'](https?:\/\/[^"']+)["']/gi,
-    )) {
-      add(match[1]);
-    }
-    for (const match of html.matchAll(
-      /data-(?:url|src|embed|player)=["']([^"']+)["'][^>]*?(?:data-(?:server|name)=["']([^"']+)["'])?/gi,
-    )) {
-      add(match[1], match[2]);
-    }
-    for (const match of html.matchAll(
-      /<[^>]+(?:data-(?:server|name)=["']([^"']+)["'][^>]+data-(?:url|src|embed|player|video)=["']([^"']+)["']|data-(?:url|src|embed|player|video)=["']([^"']+)["'][^>]+data-(?:server|name)=["']([^"']+)["'])[^>]*>/gi,
-    )) {
-      add(match[2] || match[3], match[1] || match[4]);
-    }
-    for (const match of html.matchAll(
-      /(https?:\\?\/\\?\/[^"'`\s<>]+(?:\.m3u8|\.mp4|\/embed\/|\/embed-|\/e\/|\/v\/)[^"'`\s<>]*)/gi,
-    )) {
-      add(match[1]);
-    }
     for (const match of html.matchAll(/(?:aHR0cHM6|aHR0cDov)[A-Za-z0-9+/=_-]+/g)) {
       add(match[0]);
     }
     return map;
   }
 
-  /** Episode watch page → canonical server name → embed URL. */
   private async _episodeManifest(episodeUrl: string): Promise<Record<string, string>> {
     const cacheKey = EPISODE_PLAYER_CACHE_PREFIX + episodeUrl;
     if (typeof $store !== "undefined" && $store.has(cacheKey)) {
@@ -1233,19 +1200,9 @@ class Provider {
   private _readStreamCache(episodeUrl: string, server: string): EpisodeServer | null {
     const key = this._streamCacheKey(episodeUrl, server);
     const mem = streamCache.get(key);
-    if (mem) {
-      if (mem.expiresAt > Date.now()) return mem.result;
-      streamCache.delete(key);
-    }
-    if (typeof $store === "undefined") return null;
-    const storeKey = STREAM_CACHE_PREFIX + key;
-    if (!$store.has(storeKey)) return null;
-    const stored = $store.get<CachedEpisodeServer>(storeKey);
-    if (!stored) return null;
-    if (stored.expiresAt > Date.now()) {
-      streamCache.set(key, stored);
-      return stored.result;
-    }
+    if (!mem) return null;
+    if (mem.expiresAt > Date.now()) return mem.result;
+    streamCache.delete(key);
     return null;
   }
 
@@ -1256,14 +1213,10 @@ class Provider {
   ): void {
     if (result.videoSources.length === 0) return;
     const key = this._streamCacheKey(episodeUrl, server);
-    const entry: CachedEpisodeServer = {
+    streamCache.set(key, {
       result,
       expiresAt: Date.now() + STREAM_CACHE_TTL_MS,
-    };
-    streamCache.set(key, entry);
-    if (typeof $store !== "undefined") {
-      $store.set(STREAM_CACHE_PREFIX + key, entry);
-    }
+    });
   }
 
   private _candidateServers(
@@ -1276,7 +1229,9 @@ class Provider {
         (name) => this._lookupPlayerUrl(playerMap, name),
       );
     }
-    const onPage = Object.keys(playerMap).filter((k) => k !== "default");
+    const onPage = Object.keys(playerMap).filter(
+      (k) => k !== "default" && EPISODE_SERVER_SET.has(k),
+    );
     return [...new Set([...PREFERRED_SERVERS, ...onPage])].filter(
       (name) => this._lookupPlayerUrl(playerMap, name),
     );
@@ -1817,6 +1772,26 @@ class Provider {
     return null;
   }
 
+  private async _tryDedicatedResolvers(
+    playerUrl: string,
+    referer: string,
+  ): Promise<VideoSource | null> {
+    const resolvers: {
+      test: (url: string) => boolean;
+      resolve: (url: string, ref: string) => Promise<VideoSource | null>;
+    }[] = [
+      { test: (u) => this._isDoodEmbedUrl(u), resolve: (u, r) => this._resolveDoodStream(u, r) },
+      { test: (u) => this._isFilemoonEmbedUrl(u), resolve: (u, r) => this._resolveFilemoonStream(u, r) },
+      { test: (u) => this._isOkRuEmbedUrl(u), resolve: (u, r) => this._resolveOkRuStream(u, r) },
+    ];
+    for (const { test, resolve } of resolvers) {
+      if (!test(playerUrl)) continue;
+      const source = await resolve(playerUrl, referer);
+      if (source) return source;
+    }
+    return null;
+  }
+
   private async _resolveStream(
     playerUrl: string,
     referer: string,
@@ -1830,20 +1805,8 @@ class Provider {
       }
     }
 
-    if (this._isDoodEmbedUrl(playerUrl)) {
-      const dood = await this._resolveDoodStream(playerUrl, referer);
-      if (dood) return dood;
-    }
-
-    if (this._isFilemoonEmbedUrl(playerUrl)) {
-      const filemoon = await this._resolveFilemoonStream(playerUrl, referer);
-      if (filemoon) return filemoon;
-    }
-
-    if (this._isOkRuEmbedUrl(playerUrl)) {
-      const okru = await this._resolveOkRuStream(playerUrl, referer);
-      if (okru) return okru;
-    }
+    const dedicated = await this._tryDedicatedResolvers(playerUrl, referer);
+    if (dedicated) return dedicated;
 
     let embedUrl = playerUrl;
     let html = "";
