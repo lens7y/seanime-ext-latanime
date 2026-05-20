@@ -1,11 +1,11 @@
 /// <reference path="../src/core.d.ts" />
 /// <reference path="../src/online-streaming-provider.d.ts" />
 
-// @ts-ignore: CryptoJS global is provided by Seanime at runtime
+// @ts-ignore: CryptoJS is injected by Seanime at runtime
 globalThis.CryptoJS = {
   enc: {
     Utf8: { stringify: () => "" },
-    Base64: { parse: () => ({}) },
+    Base64: { parse: () => new Uint8Array() },
   },
 } as CryptoJS;
 

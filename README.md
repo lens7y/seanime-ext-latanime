@@ -29,8 +29,6 @@ deno task test:smoke
 
 `scripts/smoke.ts` — live search checks against Latanime (network required). Same steps run in CI on `main` and in `deno task release` before tagging.
 
-Offline catalog tooling: `.dev/`
-
 ## Release
 
 ```bash
