@@ -38,7 +38,7 @@ const SERVER_URL_RULES: { needles: string[]; name: string }[] = [
   { needles: ["ok.ru"], name: "ok" },
   { needles: ["mixdrop"], name: "mixdrop" },
   { needles: ["mxdrop"], name: "mxdrop" },
-  { needles: ["dood", "d0000d"], name: "doodstream" },
+  { needles: ["dood", "d0000d", "d-s.io"], name: "doodstream" },
   { needles: ["yourupload"], name: "yourupload" },
   { needles: ["wolf"], name: "wolf" },
   { needles: ["mp4upload"], name: "mp4upload" },
@@ -52,7 +52,7 @@ const SERVER_URL_RULES: { needles: string[]; name: string }[] = [
   { needles: ["videobin"], name: "videobin" },
   { needles: ["voe.sx", "voe."], name: "voe" },
   { needles: ["dsvplay", "dsplay"], name: "dsvplay" },
-  { needles: ["bysekoze"], name: "byse" },
+  { needles: ["bysekoze", "byse.sx"], name: "byse" },
   { needles: ["hexload"], name: "hexload" },
   { needles: ["savefiles"], name: "savefiles" },
 ];
@@ -67,7 +67,15 @@ const SERVER_LABEL_ALIASES: Record<string, string> = {
 
 const VOE_BAIT_HOSTS = /test-videos\.co\.uk|bigbuckbunny/i;
 
-const UQLOAD_MIRROR_HOSTS = ["uqload.is", "uqload.com"];
+const UQLOAD_MIRROR_HOSTS = ["uqload.is", "uqload.com", "uqload.io"];
+
+const OK_RU_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
+
+const OK_RU_QUALITY: Record<string, number> = {
+  full: 1080, "1080": 1080, hd: 720, "720": 720, sd: 480, "480": 480,
+  "360": 360, low: 360, lowest: 240, mobile: 144,
+};
 
 const SERVER_ALIASES: Record<string, string[]> = {
   mxdrop: ["mixdrop"],
@@ -921,6 +929,10 @@ class Provider {
     };
   }
 
+  private _okRuHeaders(referer: string): { [key: string]: string } {
+    return { Referer: referer, "User-Agent": OK_RU_UA };
+  }
+
   private _absoluteUrl(url: string): string {
     if (url.startsWith("//")) return "https:" + url;
     if (url.startsWith("/")) return this.baseUrl + url;
@@ -1464,6 +1476,130 @@ class Provider {
     return /uqload/i.test(url);
   }
 
+  private _isOkRuEmbedUrl(url: string): boolean {
+    return /ok\.ru/i.test(url);
+  }
+
+  private _unescapeHtmlEntities(text: string): string {
+    return text
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&")
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">");
+  }
+
+  private _parseOkRuMetadata(raw: unknown): {
+    hlsManifestUrl?: string;
+    hlsMasterPlaylistUrl?: string;
+    videos?: { name: string; url: string }[];
+  } | null {
+    if (!raw) return null;
+    let data: unknown = raw;
+    if (typeof data === "string") {
+      try {
+        data = JSON.parse(data);
+      } catch {
+        return null;
+      }
+    }
+    if (typeof data !== "object" || data === null) return null;
+    return data as {
+      hlsManifestUrl?: string;
+      hlsMasterPlaylistUrl?: string;
+      videos?: { name: string; url: string }[];
+    };
+  }
+
+  private _sourceFromOkRuMetadata(meta: {
+    hlsManifestUrl?: string;
+    hlsMasterPlaylistUrl?: string;
+    videos?: { name: string; url: string }[];
+  }): VideoSource | null {
+    for (const url of [meta.hlsMasterPlaylistUrl, meta.hlsManifestUrl]) {
+      if (url && this._isValidHttpUrl(url)) {
+        return { url, type: "m3u8", quality: "default", subtitles: [] };
+      }
+    }
+    const videos = meta.videos?.filter((v) => v.url && this._isValidHttpUrl(v.url));
+    if (!videos?.length) return null;
+
+    let best = videos[0]!;
+    let bestWeight = OK_RU_QUALITY[best.name] ?? 0;
+    for (const video of videos) {
+      const weight = OK_RU_QUALITY[video.name] ?? 0;
+      if (weight >= bestWeight) {
+        best = video;
+        bestWeight = weight;
+      }
+    }
+    return { url: best.url, type: "mp4", quality: best.name || "default", subtitles: [] };
+  }
+
+  private async _loadOkRuMetadata(
+    embedUrl: string,
+    html: string,
+  ): Promise<{
+    hlsManifestUrl?: string;
+    hlsMasterPlaylistUrl?: string;
+    videos?: { name: string; url: string }[];
+  } | null> {
+    const match = html.match(/data-options=["']([^"']+)["']/i);
+    if (!match) return null;
+
+    let options: { flashvars?: { metadata?: unknown; metadataUrl?: string } };
+    try {
+      options = JSON.parse(this._unescapeHtmlEntities(match[1]));
+    } catch {
+      return null;
+    }
+
+    const flashvars = options.flashvars;
+    if (!flashvars) return null;
+
+    const meta = this._parseOkRuMetadata(flashvars.metadata);
+    if (meta) return meta;
+
+    const metadataUrl = flashvars.metadataUrl
+      ?.replace(/\\u0026/g, "&")
+      .replace(/\\\//g, "/");
+    if (!metadataUrl || !this._isValidHttpUrl(metadataUrl)) return null;
+
+    try {
+      const res = await fetch(metadataUrl, {
+        method: "POST",
+        headers: this._okRuHeaders(embedUrl),
+      });
+      if (!res.ok) return null;
+      const body = await res.text();
+      return this._parseOkRuMetadata(body);
+    } catch {
+      return null;
+    }
+  }
+
+  private async _resolveOkRuStream(
+    playerUrl: string,
+    referer: string,
+  ): Promise<VideoSource | null> {
+    if (!this._isOkRuEmbedUrl(playerUrl)) return null;
+    const embedUrl = playerUrl.replace(/^http:\/\//i, "https://");
+    try {
+      const res = await fetch(embedUrl, {
+        headers: this._okRuHeaders(referer),
+      });
+      if (!res.ok) return null;
+      const html = await res.text();
+      if (CHALLENGE_MARKERS.some((m) => html.includes(m))) return null;
+
+      const meta = await this._loadOkRuMetadata(embedUrl, html);
+      if (!meta) return null;
+      return this._sourceFromOkRuMetadata(meta);
+    } catch {
+      return null;
+    }
+  }
+
   private _uqloadMirrorUrls(playerUrl: string): string[] {
     const urls = [playerUrl];
     if (!this._isUqloadEmbedUrl(playerUrl)) return urls;
@@ -1482,11 +1618,11 @@ class Provider {
   }
 
   private _isDoodEmbedUrl(url: string): boolean {
-    return /dood(?:stream)?|d0000d|ds2play|playmogo/i.test(url);
+    return /dood(?:stream)?|d0000d|ds2play|playmogo|d-s\.io/i.test(url);
   }
 
   private _isFilemoonEmbedUrl(url: string): boolean {
-    return /filemoon|bysekoze/i.test(url);
+    return /filemoon|bysekoze|byse\.sx/i.test(url);
   }
 
   private _filemoonVideoCode(url: string): string | null {
@@ -1702,6 +1838,11 @@ class Provider {
     if (this._isFilemoonEmbedUrl(playerUrl)) {
       const filemoon = await this._resolveFilemoonStream(playerUrl, referer);
       if (filemoon) return filemoon;
+    }
+
+    if (this._isOkRuEmbedUrl(playerUrl)) {
+      const okru = await this._resolveOkRuStream(playerUrl, referer);
+      if (okru) return okru;
     }
 
     let embedUrl = playerUrl;

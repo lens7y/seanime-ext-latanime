@@ -69,6 +69,10 @@ const EPISODES = {
     "ver/naruto-latino-episodio-1",
     "https://latanime.org/ver/naruto-latino-episodio-1",
   ),
+  nineZeroNineOne: ep(
+    "ver/009-1-episodio-1",
+    "https://latanime.org/ver/009-1-episodio-1",
+  ),
 };
 
 const CASES: StreamCase[] = [
@@ -105,6 +109,9 @@ const CASES: StreamCase[] = [
   { label: "naruto:doodstream", server: "doodstream", episode: EPISODES.naruto },
   { label: "naruto:d-s-alias", server: "d-s", episode: EPISODES.naruto },
   { label: "naruto:filemoon", server: "filemoon", episode: EPISODES.naruto },
+
+  // ok.ru — on ~83% of catalog pages
+  { label: "009-1:ok", server: "ok", episode: EPISODES.nineZeroNineOne },
 
   // dead hosts — expect empty
   {
