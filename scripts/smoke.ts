@@ -12,6 +12,7 @@ type SmokeCase = {
   romaji: string;
   synonyms?: string[];
   format?: string;
+  year?: number;
   absoluteSeasonOffset?: number;
   expectIdIncludes?: string;
   expectIdExcludes?: string;
@@ -50,6 +51,25 @@ const CASES: SmokeCase[] = [
     romaji: "Yofukashi no Uta Season 2",
     expectIdIncludes: "temporada-2",
     expectIdExcludes: "yofukashi-no-uta",
+  },
+  {
+    label: "regression:ranma-2024",
+    id: 178533,
+    english: "Ranma ½ (2024)",
+    romaji: "Ranma 1/2 (2024)",
+    year: 2024,
+    expectIdIncludes: "ranma-2024",
+    expectIdExcludes: "ranma-12",
+  },
+  {
+    label: "regression:ranma-2024-s2",
+    id: 185731,
+    english: "Ranma ½ (2024) Season 2",
+    romaji: "Ranma 1/2 (2024) 2nd Season",
+    year: 2025,
+    absoluteSeasonOffset: 2,
+    expectIdIncludes: "ranma-2024",
+    expectIdExcludes: "ranma-12",
   },
   // --- risk ---
   {
@@ -268,9 +288,11 @@ if (import.meta.main) {
         isAdult: false,
         format: c.format,
         absoluteSeasonOffset: c.absoluteSeasonOffset,
+        startDate: c.year ? { year: c.year } : undefined,
       },
       query: c.english || c.romaji,
       dub: true,
+      year: c.year,
     });
     const ms = Math.round(performance.now() - searchStart);
     timings.push({ label: c.label, ms });

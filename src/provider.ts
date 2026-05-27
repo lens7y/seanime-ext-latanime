@@ -116,6 +116,7 @@ type SearchIntent = {
   titles: string[];
   primarySlugs: string[];
   season: number;
+  targetYear?: number;
   wantsMovie: boolean;
   wantsSpecial: boolean;
 };
@@ -123,7 +124,12 @@ type SearchIntent = {
 type SearchCandidate = SearchResult & {
   source: "buscar" | "slug";
   query?: string;
+  year?: number;
   score?: number;
+};
+
+type ParsedSearchResult = SearchResult & {
+  year?: number;
 };
 
 type CandidateMatch = {
@@ -324,6 +330,53 @@ function compactShowName(title: string): string {
   return stripped || base || title.trim();
 }
 
+function extractYearFromText(value: string): number | undefined {
+  const matches = value.match(/\b(19\d{2}|20\d{2}|2100)\b/g);
+  if (!matches?.length) return undefined;
+  const year = parseInt(matches[matches.length - 1], 10);
+  return year >= 1900 && year <= 2100 ? year : undefined;
+}
+
+function resolveIntentYear(opts: SearchOptions): number | undefined {
+  const direct = opts.year ?? opts.media?.startDate?.year;
+  if (direct && direct >= 1900 && direct <= 2100) return direct;
+  for (const title of mediaTitles(opts)) {
+    const parsed = extractYearFromText(title);
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+function candidateYear(candidate: SearchCandidate): number | undefined {
+  return candidate.year ?? extractYearFromText(`${candidate.title} ${candidate.id}`);
+}
+
+function isStrongYearMismatch(
+  candidate: SearchCandidate,
+  targetYear?: number,
+): boolean {
+  if (!targetYear) return false;
+  const year = candidateYear(candidate);
+  if (!year) return false;
+  return Math.abs(year - targetYear) >= 8;
+}
+
+function yearMatchScore(
+  candidate: SearchCandidate,
+  targetYear?: number,
+): number {
+  if (!targetYear) return 0;
+  const year = candidateYear(candidate);
+  if (!year) return 0;
+  const delta = Math.abs(year - targetYear);
+  if (delta === 0) return 28;
+  if (delta === 1) return 16;
+  if (delta === 2) return 8;
+  if (delta >= 10) return -36;
+  if (delta >= 6) return -20;
+  return -8;
+}
+
 function titleBaseForSlug(title: string): string {
   return title
     .replace(/\s*-\s*the\s+maxim\s*-?\s*/gi, " ")
@@ -466,6 +519,7 @@ function buildSearchIntent(opts: SearchOptions): SearchIntent {
     titles: uniqueStrings(mediaTitles(opts)),
     primarySlugs: primarySlugKeys(opts),
     season: detectSeason(opts),
+    targetYear: resolveIntentYear(opts),
     wantsMovie: format === "MOVIE" || format === "MUSIC",
     wantsSpecial: ["OVA", "SPECIAL", "TV_SPECIAL"].includes(format),
   };
@@ -543,6 +597,10 @@ function buildSlugProbes(intent: SearchIntent): string[] {
     for (const source of sources) {
       if (!source || source.length < 2) continue;
       for (const slug of slugVariants(source, intent.season)) add(slug);
+    }
+    if (intent.targetYear) {
+      const withYear = `${compactShowName(title)} ${intent.targetYear}`.trim();
+      for (const slug of slugVariants(withYear, intent.season)) add(slug);
     }
   }
 
@@ -721,6 +779,13 @@ function isSafeCandidate(
     return false;
   }
   if (
+    isStrongYearMismatch(candidate, intent.targetYear) &&
+    !m.exactSlugHit &&
+    !m.exactTitleQuery
+  ) {
+    return false;
+  }
+  if (
     targetTokens.length <= 1 &&
     !m.exactSlugHit &&
     !m.exactTitleQuery &&
@@ -776,6 +841,7 @@ function rankCandidate(
       slugMatchesTargetSeason(candidate.id, intent.season));
   if (primarySlugMatch && primarySeasonSafe) score += barePrimarySub ? 12 : 45;
 
+  score += yearMatchScore(candidate, intent.targetYear);
   score += seasonMatchScore(candidate.id, intent.season);
   score += Math.min(36, m.sharedTokens * 12);
   score += m.titleScore;
@@ -972,8 +1038,7 @@ class Provider {
   }
 
   private _parseSearchCardBadge(inner: string): string {
-    return stripTags(inner.replace(/<h3[\s\S]*?<\/h3>/gi, "")).replace(/\s+\d{4}\s*$/, "")
-      .trim();
+    return stripTags(inner.replace(/<h3[\s\S]*?<\/h3>/gi, "")).trim();
   }
 
   private _parseSeriesDetailsLabel(html: string): string {
@@ -1002,8 +1067,8 @@ class Provider {
     return "";
   }
 
-  private _parseSearchResults(html: string): SearchResult[] {
-    const results: SearchResult[] = [];
+  private _parseSearchResults(html: string): ParsedSearchResult[] {
+    const results: ParsedSearchResult[] = [];
     const seen = new Set<string>();
     const pattern =
       /<a\b[^>]+href=["']([^"']*\/anime\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
@@ -1017,13 +1082,16 @@ class Provider {
       let title = h3 ? stripTags(h3[1]) : stripTags(inner);
       if (!id || seen.has(id) || !title || title.toLowerCase() === "image") continue;
 
-      title = title.replace(/\s+(0\.0|\d{4})$/, "").trim();
+      const badge = this._parseSearchCardBadge(inner);
+      const year = extractYearFromText(`${title} ${badge} ${id}`);
+      title = title.replace(/\s+0\.0$/, "").trim();
       seen.add(id);
       results.push({
         id,
         title,
         url: href,
-        subOrDub: detectSubOrDub({ title, id, badge: this._parseSearchCardBadge(inner) }),
+        subOrDub: detectSubOrDub({ title, id, badge }),
+        year,
       });
     }
     return results;
@@ -1056,15 +1124,17 @@ class Provider {
           const html = await this._fetchText(`${this.baseUrl}/anime/${id}`);
           if (!html || !html.includes("/ver/") || seen.has(id)) return;
           const title = this._parseTitle(html) || id.replace(/-/g, " ");
+          const spanLabel = this._parseSeriesDetailsLabel(html);
           seen.add(id);
           out.push({
             id,
             title,
             url: `${this.baseUrl}/anime/${id}`,
+            year: extractYearFromText(`${title} ${id} ${spanLabel}`),
             subOrDub: detectSubOrDub({
               title,
               id,
-              spanLabel: this._parseSeriesDetailsLabel(html),
+              spanLabel,
             }),
             source: "slug",
           });
