@@ -34,7 +34,7 @@ function parseArgs(argv: string[]): { message?: string; push: boolean } {
 
 async function runPreflight(): Promise<void> {
   for (const [label, args] of [
-    ["Typecheck", ["check", "src/provider.ts"]],
+    ["Typecheck", ["check", "--no-npm", "src/provider.ts"]],
     ["Smoke test", ["task", "test:smoke"]],
     ["Stream smoke", ["task", "test:stream"]],
   ] as const) {
