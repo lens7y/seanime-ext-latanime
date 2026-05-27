@@ -3,6 +3,7 @@ import { tagFromManifest } from "./tag.ts";
 
 const ROOT = Deno.cwd();
 const FILES = [
+  "deno.json",
   "src/provider.ts",
   "src/core.d.ts",
   "src/online-streaming-provider.d.ts",

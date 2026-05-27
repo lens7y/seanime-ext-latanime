@@ -19,7 +19,7 @@
       "read": ["./"],
       "write": ["./"],
       "env": ["GITHUB_REPO", "GITHUB_REF"],
-      "run": ["git", "sh"],
+      "run": ["git", "sh", "deno"],
       "net": true
     },
     "dev": {
