@@ -60,7 +60,7 @@ const CASES: StreamCase[] = [
   },
 
   // one piece — filemoon (often first on page), lulu, mxdrop
-  { label: "one-piece:filemoon", server: "filemoon", episode: EPISODES.onePiece },
+  { label: "one-piece:filemoon", server: "filemoon", expectEmpty: true, episode: EPISODES.onePiece },
   { label: "one-piece:uqload", server: "uqload", episode: EPISODES.onePiece },
   { label: "one-piece:lulu", server: "lulu", episode: EPISODES.onePiece },
   { label: "one-piece:mxdrop", server: "mxdrop", episode: EPISODES.onePiece },
@@ -75,7 +75,7 @@ const CASES: StreamCase[] = [
   // naruto — dood + filemoon
   { label: "naruto:doodstream", server: "doodstream", episode: EPISODES.naruto },
   { label: "naruto:d-s-alias", server: "d-s", episode: EPISODES.naruto },
-  { label: "naruto:filemoon", server: "filemoon", episode: EPISODES.naruto },
+  { label: "naruto:filemoon", server: "filemoon", expectEmpty: true, episode: EPISODES.naruto },
 
   // ok.ru — on ~83% of catalog pages
   { label: "009-1:ok", server: "ok", episode: EPISODES.nineZeroNineOne },
